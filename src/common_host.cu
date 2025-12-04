@@ -22,8 +22,8 @@
 
 #include <filesystem/path.h>
 
-#	define STB_IMAGE_IMPLEMENTATION
-#	define STB_IMAGE_WRITE_IMPLEMENTATION
+#define STB_IMAGE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
 
 #ifdef __CUDACC__
 #	ifdef __NVCC_DIAG_PRAGMA_SUPPORT__
@@ -153,10 +153,11 @@ ETestbedMode mode_from_scene(const std::string& scene) {
 		return ETestbedMode::Sdf;
 	} else if (equals_case_insensitive(scene_path.extension(), "nvdb")) {
 		return ETestbedMode::Volume;
+	} else if (equals_case_insensitive(scene_path.extension(), "bezdat")) {
+		return ETestbedMode::Spline;
 	} else { // probably an image. Too bothersome to list all supported ones: exr, bin, jpg, png, tga, hdr, ...
 		return ETestbedMode::Image;
 	}
-
 }
 
 ETestbedMode mode_from_string(const std::string& str) {
@@ -168,6 +169,8 @@ ETestbedMode mode_from_string(const std::string& str) {
 		return ETestbedMode::Image;
 	} else if (equals_case_insensitive(str, "volume")) {
 		return ETestbedMode::Volume;
+	} else if (equals_case_insensitive(str, "spline")) {
+		return ETestbedMode::Spline;
 	} else {
 		return ETestbedMode::None;
 	}
@@ -179,6 +182,7 @@ std::string to_string(ETestbedMode mode) {
 		case ETestbedMode::Sdf: return "sdf";
 		case ETestbedMode::Image: return "image";
 		case ETestbedMode::Volume: return "volume";
+		case ETestbedMode::Spline: return "spline";
 		case ETestbedMode::None: return "none";
 		default: throw std::runtime_error{fmt::format("Can not convert mode {} to string.", (int)mode)};
 	}

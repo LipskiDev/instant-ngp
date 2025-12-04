@@ -66,7 +66,6 @@
 #undef near
 #undef far
 
-
 using namespace std::literals::chrono_literals;
 
 namespace ngp {
@@ -173,6 +172,7 @@ void Testbed::load_training_data(const fs::path& path) {
 		case ETestbedMode::Sdf: load_mesh(path); break;
 		case ETestbedMode::Image: load_image(path); break;
 		case ETestbedMode::Volume: load_volume(path); break;
+		case ETestbedMode::Spline: load_spline(path); break;
 		default: throw std::runtime_error{"Invalid testbed mode."};
 	}
 
@@ -203,6 +203,7 @@ void Testbed::set_mode(ETestbedMode mode) {
 	m_nerf = {};
 	m_sdf = {};
 	m_volume = {};
+	m_spline_sdf = {};
 
 	// Kill training-related things
 	m_encoding = {};
@@ -234,9 +235,7 @@ void Testbed::set_mode(ETestbedMode mode) {
 		m_use_aux_devices = false;
 	}
 
-	if (
-		m_testbed_mode == ETestbedMode::Nerf
-	) {
+	if (m_testbed_mode == ETestbedMode::Nerf) {
 		if (m_dlss_provider && m_aperture_size == 0.0f) {
 			m_dlss = true;
 		}
@@ -383,7 +382,7 @@ void Testbed::load_file(const fs::path& path) {
 
 		// Regular network config
 		if (file.contains("parent") || file.contains("network") || file.contains("encoding") || file.contains("loss") ||
-			file.contains("optimizer")) {
+		    file.contains("optimizer")) {
 			reload_network_from_file(path);
 			return;
 		}
@@ -785,7 +784,6 @@ void Testbed::imgui() {
 				m_camera_path.clear();
 			}
 
-
 			if (int read = m_camera_path.imgui(
 					m_imgui.cam_path_path,
 					m_render_ms.val(),
@@ -797,9 +795,7 @@ void Testbed::imgui() {
 					m_bounding_radius,
 					!m_nerf.training.dataset.xforms.empty() ? m_nerf.training.dataset.xforms[0].start : mat4x3::identity()
 				)) {
-				if (
-					!m_camera_path.rendering
-				) {
+				if (!m_camera_path.rendering) {
 					reset_accumulation(true);
 
 					if (m_camera_path.update_cam_from_path) {
@@ -907,7 +903,6 @@ void Testbed::imgui() {
 				}
 			}
 
-
 			if (m_camera_path.rendering) {
 				auto elapsed = std::chrono::steady_clock::now() - m_camera_path.render_start_time;
 
@@ -934,7 +929,6 @@ void Testbed::imgui() {
 
 			ImGui::BeginDisabled(m_camera_path.rendering);
 
-
 			ImGui::InputText("Video file##Video file path", m_imgui.video_path, sizeof(m_imgui.video_path));
 			m_camera_path.render_settings.filename = m_imgui.video_path;
 			ImGui::SliderInt("MP4 quality", &m_camera_path.render_settings.quality, 0, 10);
@@ -950,7 +944,6 @@ void Testbed::imgui() {
 		}
 	}
 	ImGui::End();
-
 
 	bool train_extra_dims = m_nerf.training.dataset.n_extra_learnable_dims > 0;
 	if (train_extra_dims && m_nerf.training.n_images_for_training > 0) {
@@ -1092,16 +1085,12 @@ void Testbed::imgui() {
 	ImGui::SameLine();
 	ImGui::Checkbox("Overlay FPS", &m_imgui.overlay_fps);
 
-
 	ImGui::BeginDisabled(!m_training_data_available);
 
-	if (
-		ImGui::CollapsingHeader("Training", m_training_data_available ? ImGuiTreeNodeFlags_DefaultOpen : 0)
-	) {
+	if (ImGui::CollapsingHeader("Training", m_training_data_available ? ImGuiTreeNodeFlags_DefaultOpen : 0)) {
 		if (imgui_colored_button(m_train ? "Stop training" : "Start training", 0.4)) {
 			set_train(!m_train);
 		}
-
 
 		ImGui::SameLine();
 		if (imgui_colored_button("Reset training", 0.f)) {
@@ -1122,7 +1111,6 @@ void Testbed::imgui() {
 			ImGui::Checkbox("distortion", &m_nerf.training.optimize_distortion);
 			ImGui::SameLine();
 			ImGui::Checkbox("per-image latents", &m_nerf.training.optimize_extra_dims);
-
 
 			static bool export_extrinsics_in_quat_format = true;
 			static bool extrinsics_have_been_optimized = false;
@@ -1277,7 +1265,6 @@ void Testbed::imgui() {
 	if (!m_training_data_available) {
 		ImGui::EndDisabled();
 	}
-
 
 	ImGuiTreeNodeFlags rendering_tree_node_flags = ImGuiTreeNodeFlags_DefaultOpen;
 
@@ -1480,9 +1467,7 @@ void Testbed::imgui() {
 				m_edit_world_transform = true;
 			}
 
-			if (
-				m_testbed_mode == ETestbedMode::Nerf
-			) {
+			if (m_testbed_mode == ETestbedMode::Nerf) {
 				if (ImGui::RadioButton("Translate crop box", m_camera_path.m_gizmo_op == ImGuizmo::TRANSLATE && !m_edit_world_transform)) {
 					m_camera_path.m_gizmo_op = ImGuizmo::TRANSLATE;
 					m_edit_world_transform = false;
@@ -1879,9 +1864,7 @@ void Testbed::imgui() {
 		}
 	}
 
-	if (
-		ImGui::CollapsingHeader("Snapshot", ImGuiTreeNodeFlags_DefaultOpen)
-	) {
+	if (ImGui::CollapsingHeader("Snapshot", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::Text("Snapshot");
 		ImGui::SameLine();
 		if (ImGui::Button("Save")) {
@@ -2057,7 +2040,6 @@ void Testbed::imgui() {
 
 		std::vector<float> f(m_n_levels);
 
-
 		// Hashgrid statistics
 		for (uint32_t i = 0; i < m_n_levels; ++i) {
 			f[i] = m_level_stats[i].mean();
@@ -2068,7 +2050,6 @@ void Testbed::imgui() {
 		}
 		ImGui::PlotHistogram("Grid sigmas", f.data(), m_n_levels, 0, "sigma", FLT_MAX, FLT_MAX, ImVec2(0, 60.f));
 		ImGui::Separator();
-
 
 		// Histogram of trained hashgrid params
 		ImGui::SliderInt("Show details for level", (int*)&m_histo_level, 0, m_n_levels - 1);
@@ -2120,7 +2101,6 @@ void Testbed::visualize_nerf_cameras(ImDrawList* list, const mat4& world2proj) {
 		// Visualize near distance
 		add_debug_line(list, world2proj, current_xform[3], current_xform[3] + current_xform[2] * m_nerf.training.near_distance, 0x20ffffff);
 	}
-
 }
 
 void Testbed::draw_visualizations(ImDrawList* list, const mat4x3& camera_matrix) {
@@ -2162,7 +2142,6 @@ void Testbed::draw_visualizations(ImDrawList* list, const mat4x3& camera_matrix)
 			visualize_nerf_cameras(list, world2proj);
 		}
 	}
-
 
 	if (m_visualize_unit_cube) {
 		visualize_cube(list, world2proj, vec3(0.f), vec3(1.f), mat3::identity());
@@ -2335,7 +2314,7 @@ bool Testbed::keyboard_event() {
 	if (ImGui::IsKeyPressed('.')) {
 		if (m_single_view) {
 			if (m_visualized_dimension == network_width(m_visualized_layer) - 1 &&
-				m_visualized_layer < network_num_forward_activations() - 1) {
+			    m_visualized_layer < network_num_forward_activations() - 1) {
 				set_visualized_layer(std::max(0, std::min((int)network_num_forward_activations() - 1, m_visualized_layer + 1)));
 				set_visualized_dim(0);
 			} else {
@@ -2364,7 +2343,6 @@ bool Testbed::keyboard_event() {
 		set_visualized_dim(-1);
 		reset_accumulation();
 	}
-
 
 	if (ImGui::IsKeyPressed('N')) {
 		m_sdf.analytic_normals = !m_sdf.analytic_normals;
@@ -2979,7 +2957,6 @@ void Testbed::draw_gui() {
 	glFinish();
 	glViewport(0, 0, display_w, display_h);
 
-
 	ImDrawList* list = ImGui::GetBackgroundDrawList();
 	list->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
 
@@ -3126,9 +3103,9 @@ void Testbed::prepare_next_camera_path_frame() {
 				ffmpeg.str(),
 				m_camera_path.render_settings.fps,
 				// Quality goes from 0 to 10. This conversion to CRF means a quality of 10
-				// is a CRF of 17 and a quality of 0 a CRF of 27, which covers the "sane"
-				// range of x264 quality settings according to the FFmpeg docs:
-				// https://trac.ffmpeg.org/wiki/Encode/H.264
+			    // is a CRF of 17 and a quality of 0 a CRF of 27, which covers the "sane"
+			    // range of x264 quality settings according to the FFmpeg docs:
+			    // https://trac.ffmpeg.org/wiki/Encode/H.264
 				27 - m_camera_path.render_settings.quality,
 				m_camera_path.render_settings.filename
 			);
@@ -3168,7 +3145,6 @@ void Testbed::prepare_next_camera_path_frame() {
 	}
 }
 
-
 void Testbed::train_and_render(bool skip_rendering) {
 	if (m_train) {
 		train(m_training_batch_size);
@@ -3176,10 +3152,7 @@ void Testbed::train_and_render(bool skip_rendering) {
 
 	// If we don't have a trainer, as can happen when having loaded training data or changed modes without having
 	// explicitly loaded a new neural network.
-	if (
-		m_testbed_mode != ETestbedMode::None &&
-		!m_network
-	) {
+	if (m_testbed_mode != ETestbedMode::None && !m_network) {
 		reload_network_from_file();
 		if (!m_network) {
 			throw std::runtime_error{"Unable to reload neural network."};
@@ -3237,8 +3210,7 @@ void Testbed::train_and_render(bool skip_rendering) {
 		view.camera0 = m_smoothed_camera;
 
 		// Motion blur over the fraction of time that the shutter is open. Interpolate in log-space to preserve rotations.
-		bool is_rendering_camera_path =
-			m_camera_path.rendering;
+		bool is_rendering_camera_path = m_camera_path.rendering;
 
 		view.camera1 = is_rendering_camera_path ?
 			camera_log_lerp(m_smoothed_camera, m_camera_path.render_frame_end_camera, m_camera_path.render_settings.shutter_fraction) :
@@ -3337,8 +3309,7 @@ void Testbed::train_and_render(bool skip_rendering) {
 			ivec2 render_res = view.render_buffer->in_resolution();
 			ivec2 new_render_res = clamp(ivec2(vec2(view.full_resolution) * factor), view.full_resolution / 16, view.full_resolution);
 
-			bool override_dynamic_res =
-				m_camera_path.rendering;
+			bool override_dynamic_res = m_camera_path.rendering;
 
 			if (override_dynamic_res) {
 				new_render_res = m_camera_path.render_settings.resolution;
@@ -3521,7 +3492,6 @@ void Testbed::set_camera_prediction_mode(ECameraPredictionMode mode) {
 
 ECameraPredictionMode Testbed::camera_prediction_mode() const { return m_camera_prediction_mode; }
 
-
 #ifdef NGP_GUI
 void Testbed::create_second_window() {
 	if (m_second_window.window) {
@@ -3699,7 +3669,7 @@ void Testbed::init_window(int resw, int resh, bool hidden, bool second_window) {
 	glfwSetCursorPosCallback(m_glfw_window, [](GLFWwindow* window, double xpos, double ypos) {
 		Testbed* testbed = (Testbed*)glfwGetWindowUserPointer(window);
 		if (testbed && (ImGui::IsAnyItemActive() || ImGui::GetIO().WantCaptureMouse || ImGuizmo::IsUsing()) &&
-			(ImGui::GetIO().MouseDown[0] || ImGui::GetIO().MouseDown[1] || ImGui::GetIO().MouseDown[2])) {
+		    (ImGui::GetIO().MouseDown[0] || ImGui::GetIO().MouseDown[1] || ImGui::GetIO().MouseDown[2])) {
 			testbed->redraw_gui_next_frame();
 		}
 	});
@@ -3779,7 +3749,7 @@ void Testbed::init_window(int resw, int resh, bool hidden, bool second_window) {
 	if (m_second_window.window == nullptr && second_window) {
 		create_second_window();
 	}
-#endif     // NGP_GUI
+#endif // NGP_GUI
 }
 
 void Testbed::destroy_window() {
@@ -3932,9 +3902,7 @@ bool Testbed::frame() {
 		}
 	}
 
-	if (
-		m_camera_path.rendering
-	) {
+	if (m_camera_path.rendering) {
 		prepare_next_camera_path_frame();
 		skip_rendering = false;
 	}
@@ -3971,7 +3939,6 @@ bool Testbed::frame() {
 			(*m_task_queue.tryPop())();
 		}
 	} catch (const SharedQueueEmptyException&) {}
-
 
 	train_and_render(skip_rendering);
 	if (m_testbed_mode == ETestbedMode::Sdf && m_sdf.calculate_iou_online) {
@@ -4153,6 +4120,7 @@ Testbed::NetworkDims Testbed::network_dims() const {
 		case ETestbedMode::Sdf: return network_dims_sdf(); break;
 		case ETestbedMode::Image: return network_dims_image(); break;
 		case ETestbedMode::Volume: return network_dims_volume(); break;
+		case ETestbedMode::Spline: return network_dims_spline_sdf(); break;
 		default: throw std::runtime_error{"Invalid mode."};
 	}
 }
@@ -4166,7 +4134,6 @@ void Testbed::reset_network(bool clear_density_grid) {
 	m_render_ms.set(10000);
 
 	reset_accumulation();
-
 
 	m_nerf.training.counters_rgb.rays_per_batch = 1 << 12;
 	m_nerf.training.counters_rgb.measured_batch_size_before_compaction = 0;
@@ -4328,7 +4295,7 @@ void Testbed::reset_network(bool clear_density_grid) {
 	} else {
 		uint32_t alignment = network_config.contains("otype") &&
 				(equals_case_insensitive(network_config["otype"], "FullyFusedMLP") ||
-				 equals_case_insensitive(network_config["otype"], "MegakernelMLP")) ?
+		         equals_case_insensitive(network_config["otype"], "MegakernelMLP")) ?
 			16u :
 			8u;
 
@@ -4494,7 +4461,7 @@ Testbed::Testbed(ETestbedMode mode) {
 	m_network_config = {
 		{"loss",      {{"otype", "L2"}}},
 		{"optimizer",
-		 {
+	     {
 			 {"otype", "Adam"},
 			 {"learning_rate", 1e-3},
 			 {"beta1", 0.9f},
@@ -4503,7 +4470,7 @@ Testbed::Testbed(ETestbedMode mode) {
 			 {"l2_reg", 1e-6f},
 		 }							 },
 		{"encoding",
-		 {
+	     {
 			 {"otype", "HashGrid"},
 			 {"n_levels", 16},
 			 {"n_features_per_level", 2},
@@ -4511,7 +4478,7 @@ Testbed::Testbed(ETestbedMode mode) {
 			 {"base_resolution", 16},
 		 }							 },
 		{"network",
-		 {
+	     {
 			 {"otype", "FullyFusedMLP"},
 			 {"n_neurons", 64},
 			 {"n_layers", 2},
@@ -4607,6 +4574,7 @@ void Testbed::train(uint32_t batch_size) {
 			case ETestbedMode::Sdf: training_prep_sdf(batch_size, m_stream.get()); break;
 			case ETestbedMode::Image: training_prep_image(batch_size, m_stream.get()); break;
 			case ETestbedMode::Volume: training_prep_volume(batch_size, m_stream.get()); break;
+			case ETestbedMode::Spline: training_prep_spline(batch_size, m_stream.get()); break;
 			default: throw std::runtime_error{"Invalid training mode."};
 		}
 
@@ -4635,6 +4603,7 @@ void Testbed::train(uint32_t batch_size) {
 			case ETestbedMode::Sdf: train_sdf(batch_size, get_loss_scalar, m_stream.get()); break;
 			case ETestbedMode::Image: train_image(batch_size, get_loss_scalar, m_stream.get()); break;
 			case ETestbedMode::Volume: train_volume(batch_size, get_loss_scalar, m_stream.get()); break;
+			case ETestbedMode::Spline: train_spline(batch_size, get_loss_scalar, m_stream.get()); break;
 			default: throw std::runtime_error{"Invalid training mode."};
 		}
 
@@ -4979,6 +4948,45 @@ void Testbed::render_frame_main(
 				visualized_dimension
 			);
 		} break;
+		case ETestbedMode::Spline: {
+			distance_fun_t distance_fun = m_render_ground_truth ?
+				(distance_fun_t)[&](uint32_t n_elements, const vec3* positions, float* distances, cudaStream_t stream) {
+				m_sdf.triangle_bvh->signed_distance_gpu(
+					n_elements, m_sdf.mesh_sdf_mode, positions, distances, m_sdf.triangles_gpu.data(), false, stream
+				);
+			} : (distance_fun_t)[&](uint32_t n_elements, const vec3* positions, float* distances, cudaStream_t stream) {
+				n_elements = next_multiple(n_elements, BATCH_SIZE_GRANULARITY);
+				GPUMatrix<float> positions_matrix((float*)positions, 3, n_elements);
+				GPUMatrix<float, RM> distances_matrix(distances, 1, n_elements);
+				m_network->inference(stream, positions_matrix, distances_matrix);
+			};
+
+			normals_fun_t normals_fun = m_render_ground_truth ?
+				(normals_fun_t)[&](uint32_t n_elements, const vec3* positions, vec3* normals, cudaStream_t stream){
+					// NO-OP. Normals will automatically be populated by raytrace
+				} :
+				(normals_fun_t)[&](uint32_t n_elements, const vec3* positions, vec3* normals, cudaStream_t stream) {
+				n_elements = next_multiple(n_elements, BATCH_SIZE_GRANULARITY);
+				GPUMatrix<float> positions_matrix((float*)positions, 3, n_elements);
+				GPUMatrix<float> normals_matrix((float*)normals, 3, n_elements);
+				m_network->input_gradient(stream, 0, positions_matrix, normals_matrix);
+			};
+
+			render_sdf(
+				device.stream(),
+				device,
+				distance_fun,
+				normals_fun,
+				device.render_buffer_view(),
+				focal_length,
+				camera_matrix0,
+				screen_center,
+				foveation,
+				lens,
+				visualized_dimension
+			);
+		} break;
+
 		case ETestbedMode::Image:
 			render_image(
 				device.stream(), device.render_buffer_view(), focal_length, camera_matrix0, screen_center, foveation, lens, visualized_dimension
@@ -5255,7 +5263,6 @@ void Testbed::gather_histograms() {
 			first_layer_rm.data(), m_trainer->params(), first_layer_rm.size() * sizeof(float), cudaMemcpyDeviceToHost, m_stream.get()
 		));
 		CUDA_CHECK_THROW(cudaStreamSynchronize(m_stream.get()));
-
 
 		for (uint32_t l = 0; l < m_n_levels; ++l) {
 			m_level_stats[l] = compute_level_stats(grid.data() + hg_enc->level_params_offset(l), hg_enc->level_n_params(l));

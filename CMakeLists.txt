@@ -51,6 +51,7 @@ if (APPLE)
 	set(CMAKE_MACOSX_RPATH ON)
 endif()
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 if (CMAKE_EXPORT_COMPILE_COMMANDS)
     set(CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES ${CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES})
     set(CMAKE_CUDA_STANDARD_INCLUDE_DIRECTORIES ${CMAKE_CUDA_IMPLICIT_INCLUDE_DIRECTORIES})
@@ -275,6 +276,7 @@ list(APPEND NGP_SOURCES
 	src/testbed_nerf.cu
 	src/testbed_sdf.cu
 	src/testbed_volume.cu
+	src/testbed_spline.cu
 	src/thread_pool.cpp
 	src/tinyexr_wrapper.cu
 	src/tinyobj_loader_wrapper.cu
@@ -398,10 +400,4 @@ if (NGP_BUILD_EXECUTABLE)
 	endif()
 endif(NGP_BUILD_EXECUTABLE)
 
-if (Python_FOUND)
-	add_library(pyngp SHARED src/python_api.cu)
-	set_target_properties(pyngp PROPERTIES CXX_VISIBILITY_PRESET "hidden" CUDA_VISIBILITY_PRESET "hidden")
-	target_link_libraries(pyngp PRIVATE ngp PUBLIC ${PYTHON_LIBRARIES} pybind11::module)
-	target_compile_definitions(pyngp PUBLIC -DNGP_PYTHON)
-	pybind11_extension(pyngp)
-endif()
+

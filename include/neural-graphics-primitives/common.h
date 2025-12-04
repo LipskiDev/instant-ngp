@@ -151,6 +151,7 @@ enum class ETestbedMode : int {
 	Sdf,
 	Image,
 	Volume,
+	Spline,
 	None,
 };
 
@@ -163,7 +164,6 @@ enum class ESDFGroundTruthMode : int {
 	RaytracedMesh,
 	SpheretracedMesh,
 };
-
 
 enum class ECameraPredictionMode : int {
 	None,

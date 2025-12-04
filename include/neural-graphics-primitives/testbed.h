@@ -320,6 +320,7 @@ public:
 	NetworkDims network_dims_sdf() const;
 	NetworkDims network_dims_image() const;
 	NetworkDims network_dims_nerf() const;
+	NetworkDims network_dims_spline_sdf() const;
 
 	NetworkDims network_dims() const;
 
@@ -343,6 +344,19 @@ public:
 		int visualized_dimension
 	);
 	void render_sdf(
+		cudaStream_t stream,
+		CudaDevice& device,
+		const distance_fun_t& distance_function,
+		const normals_fun_t& normals_function,
+		const CudaRenderBufferView& render_buffer,
+		const vec2& focal_length,
+		const mat4x3& camera_matrix,
+		const vec2& screen_center,
+		const Foveation& foveation,
+		const Lens& lens,
+		int visualized_dimension
+	);
+	void render_spline(
 		cudaStream_t stream,
 		CudaDevice& device,
 		const distance_fun_t& distance_function,
@@ -416,7 +430,6 @@ public:
 	);
 	void visualize_nerf_cameras(ImDrawList* list, const mat4& world2proj);
 
-
 	void set_camera_prediction_mode(ECameraPredictionMode mode);
 	ECameraPredictionMode camera_prediction_mode() const;
 	mat4x3 predict_view_camera(size_t view, float dt) const;
@@ -435,6 +448,7 @@ public:
 	void create_empty_nerf_dataset(size_t n_images, int aabb_scale = 1, bool is_hdr = false);
 	void load_nerf(const fs::path& data_path);
 	void load_nerf_post();
+	void load_spline(const fs::path& data_path);
 	void load_mesh(const fs::path& data_path);
 	void set_exposure(float exposure) { m_exposure = exposure; }
 	void set_max_level(float maxlevel);
@@ -463,6 +477,7 @@ public:
 	void reset_camera();
 	bool keyboard_event();
 	void generate_training_samples_sdf(vec3* positions, float* distances, uint32_t n_to_generate, cudaStream_t stream, bool uniform_only);
+	void generate_training_samples_spline(vec3* positions, float* distances, uint32_t n_to_generate, cudaStream_t stream, bool uniform_only);
 	void update_density_grid_nerf(
 		float decay, uint32_t n_uniform_density_grid_samples, uint32_t n_nonuniform_density_grid_samples, cudaStream_t stream
 	);
@@ -487,6 +502,7 @@ public:
 	void train_nerf_step(uint32_t target_batch_size, NerfCounters& counters, cudaStream_t stream);
 	void train_sdf(size_t target_batch_size, bool get_loss_scalar, cudaStream_t stream);
 	void train_image(size_t target_batch_size, bool get_loss_scalar, cudaStream_t stream);
+	void train_spline(size_t target_batch_size, bool get_loss_scalar, cudaStream_t stream);
 	void set_train(bool mtrain);
 
 	template <typename T> void dump_parameters_as_images(const T* params, const std::string& filename_base);
@@ -497,6 +513,7 @@ public:
 	void training_prep_nerf(uint32_t batch_size, cudaStream_t stream);
 	void training_prep_sdf(uint32_t batch_size, cudaStream_t stream);
 	void training_prep_image(uint32_t batch_size, cudaStream_t stream) {}
+	void training_prep_spline(uint32_t batch_size, cudaStream_t stream);
 	void train(uint32_t batch_size);
 	vec2 calc_focal_length(const ivec2& resolution, const vec2& relative_focal_length, int fov_axis, float zoom) const;
 	vec2 render_screen_center(const vec2& screen_center) const;
@@ -722,13 +739,10 @@ public:
 	// If the callback returns `true`, the files are considered handled and the default behavior will not occur.
 	std::function<bool(const std::vector<std::string>&)> m_file_drop_callback;
 
-
 	std::shared_ptr<GLTexture> m_pip_render_texture;
 	std::vector<std::shared_ptr<GLTexture>> m_rgba_render_textures;
 	std::vector<std::shared_ptr<GLTexture>> m_depth_render_textures;
 #endif
-
-
 
 	std::shared_ptr<CudaRenderBuffer> m_pip_render_buffer;
 
@@ -943,6 +957,54 @@ public:
 			GPUMemory<vec3> perturbations;
 		} training = {};
 	} m_sdf;
+
+	struct Spline {
+		float shadow_sharpness = 2048.0f;
+		float maximum_distance = 0.00005f;
+		float fd_normals_epsilon = 0.0005f;
+
+		ESDFGroundTruthMode groundtruth_mode = ESDFGroundTruthMode::RaytracedMesh;
+
+		BRDFParams brdf;
+
+		// Mesh data
+		EMeshSdfMode mesh_sdf_mode = EMeshSdfMode::Raystab;
+		float mesh_scale;
+
+		GPUMemory<Triangle> triangles_gpu;
+		std::vector<Triangle> triangles_cpu;
+		std::vector<float> triangle_weights;
+		DiscreteDistribution triangle_distribution;
+		GPUMemory<float> triangle_cdf;
+		std::shared_ptr<TriangleBvh> triangle_bvh; // unique_ptr
+
+		bool uses_takikawa_encoding = false;
+		bool use_triangle_octree = false;
+		int octree_depth_target = 0; // we duplicate this state so that you can waggle the slider without triggering it immediately
+		std::shared_ptr<TriangleOctree> triangle_octree;
+
+		bool analytic_normals = false;
+		float zero_offset = 0;
+		float distance_scale = 0.95f;
+
+		double iou = 0.0;
+		float iou_decay = 0.0f;
+		bool calculate_iou_online = false;
+		GPUMemory<uint32_t> iou_counter;
+		struct Training {
+			size_t idx = 0;
+			size_t size = 0;
+			size_t max_size = 1 << 24;
+			bool did_generate_more_training_data = false;
+			bool generate_sdf_data_online = true;
+			float surface_offset_scale = 1.0f;
+			GPUMemory<vec3> positions;
+			GPUMemory<vec3> positions_shuffled;
+			GPUMemory<float> distances;
+			GPUMemory<float> distances_shuffled;
+			GPUMemory<vec3> perturbations;
+		} training = {};
+	} m_spline_sdf;
 
 	enum EDataType {
 		Float,
@@ -1288,7 +1350,6 @@ public:
 	} m_distortion;
 
 	std::shared_ptr<NerfNetwork<network_precision_t>> m_nerf_network;
-
 };
 
 } // namespace ngp
