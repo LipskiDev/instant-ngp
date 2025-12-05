@@ -985,26 +985,28 @@ void Testbed::load_spline(const fs::path& data_path) {
 		}
 	}
 
-	//
-	//
-	//		load spline
-	//
-	//
-	//
-	// tlog::success() << "Loaded sphere: center = (" << x << ", " << y << ", " << z << "), radius = " << r;
-	//
-	// m_raw_aabb.min = vec3(std::numeric_limits<float>::infinity());
-	// m_raw_aabb.max = vec3(-std::numeric_limits<float>::infinity());
-	//
-	// m_raw_aabb.enlarge(m_sphere.position + vec3(m_sphere.radius));
-	// m_raw_aabb.enlarge(m_sphere.position - vec3(m_sphere.radius));
-	//
-	// const float inflation = 0.005f;
-	//
-	// m_raw_aabb.inflate(length(m_raw_aabb.diag()) * inflation);
-	// float scale = compMax(m_raw_aabb.diag());
-	//
-	// // Normalize sphere coords to lie withing [0,1]^3
+
+
+	m_raw_aabb.min = vec3(std::numeric_limits<float>::infinity());
+	m_raw_aabb.max = vec3(-std::numeric_limits<float>::infinity());
+
+	for(int i = 0; i < m_spline_sdf.points.size(); i++) {
+		Spline::Point p = m_spline.sdf.points[i];
+		m_raw_aabb.enlarge(vec3(p[0], p[1], p[2]) + vec3(p.radius));
+		m_raw_aabb.enlarge(vec3(p[0], p[1], p[2]) - vec3(p.radius));
+	}
+
+	const float inflation = 0.005f;
+
+	m_raw_aabb.inflate(length(m_raw_aabb.diag()) * inflation);
+	float scale = compMax(m_raw_aabb.diag());
+
+	// Normalize sphere coords to lie withing [0,1]^3
+	for(int i = 0; i < m_spline_sdf.points.size(); i++) {
+		Spline::Point p = m_spline.sdf.points[i];
+		m_raw_aabb.enlarge(vec3(p[0], p[1], p[2]) + vec3(p.radius));
+		m_raw_aabb.enlarge(vec3(p[0], p[1], p[2]) - vec3(p.radius));
+	}
 	// m_sphere.position = (m_sphere.position - m_raw_aabb.min - 0.5f * m_raw_aabb.diag()) / scale + vec3(0.5f);
 	//
 	// m_aabb = {};
