@@ -959,6 +959,20 @@ public:
 	} m_sdf;
 
 	struct Spline {
+
+        struct Point {
+            float pos[3];
+            float radius;
+            float color[3];
+        };
+
+        struct Segment {
+            std::vector<int> indices;
+        };
+
+        std::vector<Point> points;
+        std::vector<Segment> segments;
+
 		float shadow_sharpness = 2048.0f;
 		float maximum_distance = 0.00005f;
 		float fd_normals_epsilon = 0.0005f;

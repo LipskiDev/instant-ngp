@@ -26,6 +26,8 @@
 #include <neural-graphics-primitives/triangle_bvh.cuh>
 #include <neural-graphics-primitives/triangle_octree.cuh>
 
+#include <openxr/openxr.h>
+#include <string>
 #include <tiny-cuda-nn/encodings/grid.h>
 #include <tiny-cuda-nn/gpu_matrix.h>
 #include <tiny-cuda-nn/network_with_input_encoding.h>
@@ -937,34 +939,50 @@ void Testbed::render_spline(
 }
 
 void Testbed::load_spline(const fs::path& data_path) {
-	tlog::info() << "Trying to load sphere at: " << data_path;
+	tlog::info() << "Trying to load spline at: " << data_path;
 	std::ifstream file(data_path.str());
 	if (!file.is_open()) {
-		tlog::error() << "Could not open sphere CSV file: " << data_path;
+		tlog::error() << "Could not open spline .bezdat file: " << data_path;
 		return;
 	}
 
 	std::string line;
 
-	// --- 1. Skip header ---
 	if (!std::getline(file, line)) {
-		tlog::error() << "Sphere CSV file is empty.";
+		tlog::error() << "Spline .bezdat file is empty.";
 		return;
 	}
 
-	// --- 2. Read the actual sphere data line ---
-	if (!std::getline(file, line)) {
-		tlog::error() << "Sphere CSV contains no data row.";
-		return;
-	}
+
 
 	std::stringstream ss(line);
-	float x, y, z, r;
-	char c;
 
-	if (!(ss >> x >> c >> y >> c >> z >> c >> r)) {
-		tlog::error() << "Failed to parse sphere CSV line: " << line;
-		return;
+	while(std::getline(file, line)) {
+		if(line.empty()) continue;
+
+		std::istringstream iss(line);
+		std::string tag;
+		iss >> tag;
+
+		if(tag == "PT")
+		{
+			Spline::Point p;
+			iss >> p.pos[0] >> p.pos[1] >> p.pos[2]
+				>> p.radius
+				>> p.color[0] >> p.color[1] >> p.color[2];
+			m_spline_sdf.points.push_back(p);
+		} else if(tag == "BC") {
+			Spline::Segment seg;
+			int idx;
+
+			while(iss >> idx) {
+				seg.indices.push_back(idx);
+			}
+
+			if(!seg.indices.empty()) {
+				m_spline_sdf.segments.push_back(std::move(seg));
+			}
+		}
 	}
 
 	//
