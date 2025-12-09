@@ -960,18 +960,32 @@ public:
 
 	struct Spline {
 
+		// CPU side structs
         struct Point {
-            float pos[3];
+            vec3 pos;
             float radius;
-            float color[3];
+            vec3 color;
         };
 
-        struct Segment {
+        struct Segment { 
             std::vector<int> indices;
         };
 
         std::vector<Point> points;
+
+		GPUMemory<Point> points_gpu;
+
         std::vector<Segment> segments;
+
+		std::vector<int> index_flat_host;
+		std::vector<int> index_offsets_host;
+		std::vector<int> index_counts_host;
+
+
+		// GPU ready memory
+		GPUMemory<int> index_flat;
+		GPUMemory<int> index_offsets;
+		GPUMemory<int> index_counts;
 
 		float shadow_sharpness = 2048.0f;
 		float maximum_distance = 0.00005f;

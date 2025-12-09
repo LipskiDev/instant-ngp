@@ -154,6 +154,7 @@ ETestbedMode mode_from_scene(const std::string& scene) {
 	} else if (equals_case_insensitive(scene_path.extension(), "nvdb")) {
 		return ETestbedMode::Volume;
 	} else if (equals_case_insensitive(scene_path.extension(), "bezdat")) {
+		tlog::info() << "SPLINE SCENE";
 		return ETestbedMode::Spline;
 	} else { // probably an image. Too bothersome to list all supported ones: exr, bin, jpg, png, tga, hdr, ...
 		return ETestbedMode::Image;
