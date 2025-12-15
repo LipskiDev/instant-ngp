@@ -1021,8 +1021,8 @@ void Testbed::load_spline(const fs::path& data_path) {
 
 	for(int i = 0; i < m_spline_sdf.points.size(); i++) {
 		Spline::Point p = m_spline_sdf.points[i];
-		m_raw_aabb.enlarge(vec3(p.pos[0], p.pos[1], p.pos[2]) + vec3(p.radius));
-		m_raw_aabb.enlarge(vec3(p.pos[0], p.pos[1], p.pos[2]) - vec3(p.radius));
+		m_raw_aabb.enlarge(p.pos + vec3(2 * p.radius));
+		m_raw_aabb.enlarge(p.pos - vec3(2 * p.radius));
 	}
 
 	const float inflation = 0.0005f;
@@ -1043,15 +1043,17 @@ void Testbed::load_spline(const fs::path& data_path) {
 	m_aabb = {};
 	for (int i = 0; i < (int)m_spline_sdf.points.size(); ++i) {
 		const Spline::Point& p = m_spline_sdf.points[i];
-		m_aabb.enlarge(p.pos + vec3(p.radius));
-		m_aabb.enlarge(p.pos - vec3(p.radius));
+		m_aabb.enlarge(p.pos + vec3(2 * p.radius));
+		m_aabb.enlarge(p.pos - vec3(2 * p.radius));
 	}
 
-	float tube_max_radius = 0.2; // same as in sampler
-	m_aabb.min -= vec3(tube_max_radius * 0.2f);
-	m_aabb.max += vec3(tube_max_radius * 0.2f);
+	// float tube_max_radius = 0.2; // same as in sampler
+	// m_aabb.min -= vec3(tube_max_radius * 0.2f);
+	// m_aabb.max += vec3(tube_max_radius * 0.2f);
+	m_aabb.inflate(length(m_aabb.diag()) * inflation);
 
 	m_render_aabb = m_aabb;
+	m_render_aabb.inflate(length(m_render_aabb.diag()) * inflation);
 	m_render_aabb_to_local = mat3(1.0f);
 	
 
@@ -1161,7 +1163,9 @@ __global__ void generate_spline_surface_distances(
     int*   indices_offsets,
     int*   indices_counts,
     int    n_segments,
-    uint32_t seed
+    uint32_t seed,
+	float radius_min,
+	float radius_max
 ) {
     uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n_elements) return;
@@ -1188,9 +1192,21 @@ __global__ void generate_spline_surface_distances(
     vec3 pos_on_curve     = hermite_pos_eval(hermite_curve.first, hermite_curve.second, t);
     vec3 tangent_on_curve = hermite_tangent_eval(hermite_curve.first, hermite_curve.second, t);
 
-    const float tube_R   = 0.1f;         // constant radius for now
-    const float max_r    = 0.5f;          // sample radius range [0, max_r]
-    float radius_sample  = random_val(rng) * max_r;
+    float r0 = p0.radius;
+	float r1 = p1.radius;
+	float r2 = p2.radius;
+	float r3 = p3.radius;
+
+	// simple cubic Bézier interpolation of scalar radius
+	float tube_R =
+    	(1-t)*(1-t)*(1-t)*r0 +
+    	3*(1-t)*(1-t)*t*r1 +
+    	3*(1-t)*t*t*r2 +
+    	t*t*t*r3;
+
+	float r_min = tube_R * radius_min;
+	float r_max = tube_R * radius_max;
+    float radius_sample  = r_min + random_val(rng) * (r_max - r_min);
     float theta          = random_val(rng) * 2.0f * PI();
 
     vec3 disk_point = point_on_disk(pos_on_curve, tangent_on_curve, radius_sample, theta);
@@ -1203,16 +1219,14 @@ __global__ void generate_spline_surface_distances(
 void Testbed::generate_training_samples_spline(vec3* positions, float* distances, uint32_t n_to_generate, cudaStream_t stream, bool uniform_only) {
 	uint32_t n_to_generate_base = n_to_generate / 8;
 	const uint32_t n_to_generate_surface_exact = uniform_only ? 0 : n_to_generate_base * 4;
-	const uint32_t n_to_generate_surface_offset = uniform_only ? 0 : n_to_generate_base * 3;
-	const uint32_t n_to_generate_uniform = uniform_only ? n_to_generate : n_to_generate_base * 1;
-
-	const uint32_t n_to_generate_surface = n_to_generate_surface_exact + n_to_generate_surface_offset;
+	const uint32_t n_to_generate_distance_outside = uniform_only ? 0 : n_to_generate_base * 3;
+	const uint32_t n_to_generate_distance_inside = uniform_only ? 0 : n_to_generate_base * 1;
 
 	linear_kernel(
 		generate_spline_surface_distances,
 		0,
 		stream,
-		n_to_generate,
+		n_to_generate_surface_exact,
 		m_spline_sdf.training.positions.data(),
 		m_spline_sdf.training.distances.data(),
 		m_spline_sdf.points_gpu.data(),
@@ -1220,19 +1234,44 @@ void Testbed::generate_training_samples_spline(vec3* positions, float* distances
 		m_spline_sdf.index_offsets.data(),
 		m_spline_sdf.index_counts.data(),
 		(int)m_spline_sdf.segments.size(),
-		m_training_step + 1      // seed
+		m_training_step + 1,      // seed
+		0.95,
+		1.05
 	);
 
-// 	linear_kernel(
-//     generate_cylinder_samples,
-//     0, stream,
-//     n_to_generate,
-//     m_spline_sdf.training.positions.data(),
-//     m_spline_sdf.training.distances.data(),
-//     1337u
-// );
+	linear_kernel(
+		generate_spline_surface_distances,
+		0,
+		stream,
+		n_to_generate_distance_outside,
+		m_spline_sdf.training.positions.data() + n_to_generate_surface_exact,
+		m_spline_sdf.training.distances.data()+ n_to_generate_surface_exact,
+		m_spline_sdf.points_gpu.data(),
+		m_spline_sdf.index_flat.data(),
+		m_spline_sdf.index_offsets.data(),
+		m_spline_sdf.index_counts.data(),
+		(int)m_spline_sdf.segments.size(),
+		m_training_step + 1,      // seed
+		1.05,
+		5
+	);
 
-
+	linear_kernel(
+		generate_spline_surface_distances,
+		0,
+		stream,
+		n_to_generate_distance_inside,
+		m_spline_sdf.training.positions.data() + n_to_generate_surface_exact + n_to_generate_distance_outside,
+		m_spline_sdf.training.distances.data()+ n_to_generate_surface_exact + n_to_generate_distance_outside,
+		m_spline_sdf.points_gpu.data(),
+		m_spline_sdf.index_flat.data(),
+		m_spline_sdf.index_offsets.data(),
+		m_spline_sdf.index_counts.data(),
+		(int)m_spline_sdf.segments.size(),
+		m_training_step + 1,      // seed
+		0,
+		0.95
+	);
 
 	CUDA_CHECK_THROW(cudaStreamSynchronize(stream));
 }
