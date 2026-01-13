@@ -68,6 +68,23 @@ struct ViewIdx {
 	uint32_t view;
 };
 
+template<typename T>
+struct hermite_node {
+	T p;
+	T t;
+};
+
+struct HermiteNode{
+	vec3 p; // position
+	vec3 m; // tangent
+	float r; // radius
+};
+
+struct HermiteSegment{
+	HermiteNode a;
+	HermiteNode b;
+};
+
 class Testbed {
 public:
 	Testbed(ETestbedMode mode = ETestbedMode::None);
@@ -477,7 +494,6 @@ public:
 	void reset_camera();
 	bool keyboard_event();
 	void generate_training_samples_sdf(vec3* positions, float* distances, uint32_t n_to_generate, cudaStream_t stream, bool uniform_only);
-	void generate_training_samples_spline(vec3* positions, float* distances, uint32_t n_to_generate, cudaStream_t stream, bool uniform_only);
 	void update_density_grid_nerf(
 		float decay, uint32_t n_uniform_density_grid_samples, uint32_t n_nonuniform_density_grid_samples, cudaStream_t stream
 	);
@@ -986,6 +1002,62 @@ public:
 		GPUMemory<int> index_flat;
 		GPUMemory<int> index_offsets;
 		GPUMemory<int> index_counts;
+		
+		struct TrainingInput {
+			// Sample Position
+			float x;
+			float y;
+			float z;
+
+			// Hermite Node A
+			// Position
+			float A_px;
+			float A_py;
+			float A_pz;
+			// Tangent
+			float A_mx;
+			float A_my;
+			float A_mz;
+			// Radius
+			float A_r;
+
+			// Hermite Node B
+			// Position
+			float B_px;
+			float B_py;
+			float B_pz;
+			// Tangent
+			float B_mx;
+			float B_my;
+			float B_mz;
+			// Radius
+			float B_r;
+		};
+
+		enum TrainingInputStrides : int {
+			x = 0,
+			y = 1,
+			z = 2,
+
+			A_px = 3,
+			A_py = 4,
+			A_pz = 5,
+			A_mx = 6,
+			A_my = 7,
+			A_mz = 8,
+			A_r  = 9,
+
+			B_px = 10,
+			B_py = 11,
+			B_pz = 12,
+			B_mx = 13,
+			B_my = 14,
+			B_mz = 15,
+			B_r  = 16,
+		};
+
+		GPUMemory<TrainingInput> inference_inputs;
+		HermiteSegment m_current_render_target;
 
 		float shadow_sharpness = 2048.0f;
 		float maximum_distance = 0.00005f;
@@ -1019,6 +1091,7 @@ public:
 		float iou_decay = 0.0f;
 		bool calculate_iou_online = false;
 		GPUMemory<uint32_t> iou_counter;
+
 		struct Training {
 			size_t idx = 0;
 			size_t size = 0;
@@ -1026,13 +1099,15 @@ public:
 			bool did_generate_more_training_data = false;
 			bool generate_sdf_data_online = true;
 			float surface_offset_scale = 1.0f;
-			GPUMemory<vec3> positions;
-			GPUMemory<vec3> positions_shuffled;
+			GPUMemory<TrainingInput> inputs;
+			GPUMemory<TrainingInput> inputs_shuffled;
 			GPUMemory<float> distances;
 			GPUMemory<float> distances_shuffled;
 			GPUMemory<vec3> perturbations;
 		} training = {};
 	} m_spline_sdf;
+
+	void generate_training_samples_spline(Spline::TrainingInput* inputs, float* distances, uint32_t n_to_generate, cudaStream_t stream, bool uniform_only);
 
 	enum EDataType {
 		Float,

@@ -1627,6 +1627,88 @@ void Testbed::imgui() {
 			ImGui::TreePop();
 		}
 
+		if (m_testbed_mode == ETestbedMode::Spline && ImGui::TreeNode("Spline Segment settings")) {
+			HermiteSegment& seg = m_spline_sdf.m_current_render_target;
+			HermiteNode& A = seg.a;
+			HermiteNode& B = seg.b;
+
+			auto len3 = [](const vec3& v) {
+				return sqrtf(v.x*v.x + v.y*v.y + v.z*v.z);
+			};
+			auto normalize3 = [&](const vec3& v) {
+				float l = len3(v);
+				if (l < 1e-20f) return vec3{1.0f, 0.0f, 0.0f};
+				float inv = 1.0f / l;
+				return vec3{v.x*inv, v.y*inv, v.z*inv};
+			};
+			auto clamp_tangent_len = [&](vec3 v, float max_len) {
+				float l = len3(v);
+				if (l < 1e-20f) return vec3{0.0f, 0.0f, 0.0f};
+				if (l <= max_len) return v;
+				float s = max_len / l;
+				return vec3{v.x*s, v.y*s, v.z*s};
+			};
+
+			// --- Derived quantities ---
+			vec3 AB = vec3{B.p.x - A.p.x, B.p.y - A.p.y, B.p.z - A.p.z};
+			float segment_len = fmaxf(len3(AB), 1e-6f);
+
+			static bool edit_tangent_as_dir_len = true;
+
+			ImGui::Text("Derived");
+			ImGui::Text("Segment length: %.6f", segment_len);
+			ImGui::Separator();
+
+			auto draw_node = [&](const char* label, HermiteNode& n, const vec3& default_dir) {
+				if (!ImGui::TreeNode(label)) return;
+
+				// --- Position ---
+				ImGui::TextUnformatted("Position");
+				ImGui::SliderFloat3("p", &n.p.x, -1.0, 1.0, "%.6f");
+
+				ImGui::Separator();
+
+				// --- Tangent ---
+				ImGui::TextUnformatted("Tangent");
+				ImGui::SliderFloat3("m", &n.m.x, -1.0, 1.0, "%.6f");
+
+				ImGui::Separator();
+
+				// --- Radius ---
+				ImGui::TextUnformatted("Radius");
+				ImGui::SliderFloat("r", &n.r, 0.05, 1.0, "%.6f");
+
+				// Convenience buttons
+				if (ImGui::Button("Reset tangent")) {
+					float default_len = 0.5f * segment_len;
+					n.m = vec3{default_dir.x*default_len, default_dir.y*default_len, default_dir.z*default_len};
+				}
+				ImGui::SameLine();
+				if (ImGui::Button("Reset radius")) {
+					n.r = 0.5f;
+				}
+
+				ImGui::TreePop();
+			};
+
+			vec3 dirAB = normalize3(AB);
+			vec3 dirBA = vec3{-dirAB.x, -dirAB.y, -dirAB.z};
+
+			draw_node("Hermite Node A", m_spline_sdf.m_current_render_target.a, dirAB);
+			draw_node("Hermite Node B", m_spline_sdf.m_current_render_target.b, dirBA);
+
+			ImGui::Separator();
+
+			if (ImGui::TreeNode("Normalization targets (debug)")) {
+				ImGui::BulletText("NN input: [x', y', z', A.p', A.m', A.r', B.p', B.m', B.r']");
+				ImGui::BulletText("Query domain: approx [-1.2, 1.2]^3");
+				ImGui::BulletText("Distance: d_world = k_s * d_norm");
+				ImGui::TreePop();
+			}
+
+			ImGui::TreePop();
+		}
+
 		if (m_testbed_mode == ETestbedMode::Image && ImGui::TreeNode("Image rendering options")) {
 			static bool quantize_to_byte = false;
 			static float mse = 0.0f;
@@ -4870,6 +4952,176 @@ void Testbed::render_frame(
 	);
 }
 
+__global__
+void pack_inputs_hermite_segment
+(
+	uint32_t n_elements,
+	const vec3* __restrict__ positions,
+	HermiteSegment seg,
+	float* __restrict__ out
+) {
+	const uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+	if(i >= n_elements) return;
+
+	const uint32_t stride = n_elements;
+
+	const vec3 x = positions[i];
+
+	// 0..2: query position
+    out[0 * stride + i] = x.x;
+    out[1 * stride + i] = x.y;
+    out[2 * stride + i] = x.z;
+
+    // 3..9: node A
+    out[3 * stride + i] = seg.a.p.x;
+    out[4 * stride + i] = seg.a.p.y;
+    out[5 * stride + i] = seg.a.p.z;
+
+    out[6 * stride + i] = seg.a.m.x;
+    out[7 * stride + i] = seg.a.m.y;
+    out[8 * stride + i] = seg.a.m.z;
+
+    out[9 * stride + i] = seg.a.r;
+
+    // 10..16: node B
+    out[10 * stride + i] = seg.b.p.x;
+    out[11 * stride + i] = seg.b.p.y;
+    out[12 * stride + i] = seg.b.p.z;
+
+    out[13 * stride + i] = seg.b.m.x;
+    out[14 * stride + i] = seg.b.m.y;
+    out[15 * stride + i] = seg.b.m.z;
+
+    out[16 * stride + i] = seg.b.r;
+	// printf("PACKING: (X: %f, Y: %f, Z: %f, A.px: %f, A.py: %f, A.pz: %f, A.mx: %f, A.my: %f, A.mz: %f, A.r: %f, B.px: %f, B.py: %f, B.pz: %f, B.mx: %f, B.my: %f, B.mz: %f, B.r: %f\n)", 
+	// 	x.x, x.y, x.z, 
+	// 	seg.a.p.x, seg.a.p.y, seg.a.p.z, 
+	// 	seg.a.m.x, seg.a.m.y, seg.a.m.z,
+	// 	seg.a.r,
+	// 	seg.b.p.x, seg.b.p.y, seg.b.p.z, 
+	// 	seg.b.m.x, seg.b.m.y, seg.b.m.z,
+	// 	seg.b.r);
+}
+
+__global__
+void pack_inputs_hermite_segment_row_major(
+	uint32_t n_elements,
+	const vec3* __restrict__ positions,
+	HermiteSegment seg,
+	float* __restrict__ out
+) {
+	const uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+	if (i >= n_elements) return;
+
+	const uint32_t stride = 17; // features per sample
+	float* dst = out + i * stride;
+
+	const vec3 x = positions[i];
+
+	dst[0]  = x.x;
+	dst[1]  = x.y;
+	dst[2]  = x.z;
+
+	dst[3]  = seg.a.p.x;
+	dst[4]  = seg.a.p.y;
+	dst[5]  = seg.a.p.z;
+
+	dst[6]  = seg.a.m.x;
+	dst[7]  = seg.a.m.y;
+	dst[8]  = seg.a.m.z;
+
+	dst[9]  = seg.a.r;
+
+	dst[10] = seg.b.p.x;
+	dst[11] = seg.b.p.y;
+	dst[12] = seg.b.p.z;
+
+	dst[13] = seg.b.m.x;
+	dst[14] = seg.b.m.y;
+	dst[15] = seg.b.m.z;
+
+	dst[16] = seg.b.r;
+}
+
+void pack_inputs_hermite_segment_cpu(
+	uint32_t n_elements,
+	const vec3* positions,
+	const HermiteSegment& seg,
+	float* out
+) {
+	const uint32_t stride = n_elements;
+
+	for (uint32_t i = 0; i < n_elements; ++i) {
+		const vec3& x = positions[i];
+
+		// 0..2: query position
+		out[0  * stride + i] = x.x;
+		out[1  * stride + i] = x.y;
+		out[2  * stride + i] = x.z;
+
+		// 3..9: node A
+		out[3  * stride + i] = seg.a.p.x;
+		out[4  * stride + i] = seg.a.p.y;
+		out[5  * stride + i] = seg.a.p.z;
+
+		out[6  * stride + i] = seg.a.m.x;
+		out[7  * stride + i] = seg.a.m.y;
+		out[8  * stride + i] = seg.a.m.z;
+
+		out[9  * stride + i] = seg.a.r;
+
+		// 10..16: node B
+		out[10 * stride + i] = seg.b.p.x;
+		out[11 * stride + i] = seg.b.p.y;
+		out[12 * stride + i] = seg.b.p.z;
+
+		out[13 * stride + i] = seg.b.m.x;
+		out[14 * stride + i] = seg.b.m.y;
+		out[15 * stride + i] = seg.b.m.z;
+
+		out[16 * stride + i] = seg.b.r;
+	}
+}
+
+void print_gpu_sample_column_major(
+	const float* device_ptr,   // GPU pointer
+	uint32_t n_features,        // e.g. 17
+	uint32_t n_elements,        // padded batch size
+	uint32_t sample_index,      // which sample to print
+	cudaStream_t stream = 0
+) {
+	if (sample_index >= n_elements) {
+		std::cout << "sample_index out of range\n";
+		return;
+	}
+
+	// Copy only the values we need: one value per feature
+	std::vector<float> host(n_features);
+
+	for (uint32_t f = 0; f < n_features; ++f) {
+		cudaMemcpyAsync(
+			&host[f],
+			device_ptr + f * n_elements + sample_index,
+			sizeof(float),
+			cudaMemcpyDeviceToHost,
+			stream
+		);
+	}
+
+	cudaStreamSynchronize(stream);
+
+	std::cout << "GPU sample " << sample_index << ":\n";
+	for (uint32_t f = 0; f < n_features; ++f) {
+		std::cout << "  f[" << f << "] = " << host[f] << "\n";
+	}
+}
+
+__global__ void force_feature(uint32_t n, float* inputs, uint32_t feature, float value) {
+	uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+	if (i >= n) return;
+	inputs[(size_t)feature * n + i] = value;
+}
+
 void Testbed::render_frame_main(
 	CudaDevice& device,
 	const mat4x3& camera_matrix0,
@@ -4956,9 +5208,18 @@ void Testbed::render_frame_main(
 				);
 			} : (distance_fun_t)[&](uint32_t n_elements, const vec3* positions, float* distances, cudaStream_t stream) {
 				n_elements = next_multiple(n_elements, BATCH_SIZE_GRANULARITY);
-				GPUMatrix<float> positions_matrix((float*)positions, 3, n_elements);
+				m_spline_sdf.inference_inputs.resize((size_t) 17 * (size_t) n_elements); // 17 input dimensions
+				
+				linear_kernel(pack_inputs_hermite_segment, 0, stream, n_elements, positions, m_spline_sdf.m_current_render_target, reinterpret_cast<float*>(m_spline_sdf.inference_inputs.data()));
+
+				linear_kernel(force_feature, 0, stream, n_elements, reinterpret_cast<float*>(m_spline_sdf.inference_inputs.data()), 8, 1);
+
+				print_gpu_sample_column_major(reinterpret_cast<float*>(m_spline_sdf.inference_inputs.data()), 17, n_elements, 0, stream);
+
+				GPUMatrix<float> input_matrix(reinterpret_cast<float*>(m_spline_sdf.inference_inputs.data()), 17, n_elements);
+
 				GPUMatrix<float, RM> distances_matrix(distances, 1, n_elements);
-				m_network->inference(stream, positions_matrix, distances_matrix);
+				m_network->inference(stream, input_matrix, distances_matrix);
 			};
 
 			normals_fun_t normals_fun = m_render_ground_truth ?
@@ -4967,9 +5228,13 @@ void Testbed::render_frame_main(
 				} :
 				(normals_fun_t)[&](uint32_t n_elements, const vec3* positions, vec3* normals, cudaStream_t stream) {
 				n_elements = next_multiple(n_elements, BATCH_SIZE_GRANULARITY);
-				GPUMatrix<float> positions_matrix((float*)positions, 3, n_elements);
+				m_spline_sdf.inference_inputs.resize((size_t) 17 * (size_t) n_elements); // 17 input dimensions
+
+				linear_kernel(pack_inputs_hermite_segment, 0, stream, n_elements, positions, m_spline_sdf.m_current_render_target, reinterpret_cast<float*>(m_spline_sdf.inference_inputs.data()));
+
+				GPUMatrix<float> input_matrix(reinterpret_cast<float*>(m_spline_sdf.inference_inputs.data()), 17, n_elements);
 				GPUMatrix<float> normals_matrix((float*)normals, 3, n_elements);
-				m_network->input_gradient(stream, 0, positions_matrix, normals_matrix);
+				m_network->input_gradient(stream, 0, input_matrix, normals_matrix);
 			};
 
 			render_sdf(

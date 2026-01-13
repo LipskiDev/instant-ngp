@@ -47,7 +47,7 @@ static constexpr uint32_t MARCH_ITER = 10000;
 
 Testbed::NetworkDims Testbed::network_dims_spline_sdf() const {
 	NetworkDims dims;
-	dims.n_input = 3;
+	dims.n_input = 17;
 	dims.n_output = 1;
 	dims.n_pos = 3;
 	return dims;
@@ -735,14 +735,14 @@ void Testbed::render_spline(
 	if (m_render_mode == ERenderMode::Slice) {
 		plane_z = -plane_z;
 	}
-	auto* octree_ptr = m_sdf.uses_takikawa_encoding || m_sdf.use_triangle_octree ? m_sdf.triangle_octree.get() : nullptr;
+	auto* octree_ptr = m_spline_sdf.uses_takikawa_encoding || m_spline_sdf.use_triangle_octree ? m_spline_sdf.triangle_octree.get() : nullptr;
 
 	SphereTracer tracer;
 
 	uint32_t n_octree_levels = octree_ptr ? octree_ptr->depth() : 0;
 
 	BoundingBox sdf_bounding_box = m_aabb;
-	sdf_bounding_box.inflate(m_sdf.zero_offset);
+	sdf_bounding_box.inflate(m_spline_sdf.zero_offset);
 
 	if (m_jit_fusion) {
 		if (!device.fused_render_kernel()) {
@@ -793,18 +793,18 @@ void Testbed::render_spline(
 		stream
 	);
 
-	bool gt_raytrace = m_render_ground_truth && m_sdf.groundtruth_mode == ESDFGroundTruthMode::RaytracedMesh;
+	bool gt_raytrace = m_render_ground_truth && m_spline_sdf.groundtruth_mode == ESDFGroundTruthMode::RaytracedMesh;
 
 	auto trace = [&](SphereTracer& tracer) {
 		if (gt_raytrace) {
-			return tracer.trace_bvh(m_sdf.triangle_bvh.get(), m_sdf.triangles_gpu.data(), stream);
+			return tracer.trace_bvh(m_spline_sdf.triangle_bvh.get(), m_spline_sdf.triangles_gpu.data(), stream);
 		} else {
 			return tracer.trace(
 				distance_function,
 				m_network.get(),
-				m_sdf.zero_offset,
-				m_sdf.distance_scale,
-				m_sdf.maximum_distance,
+				m_spline_sdf.zero_offset,
+				m_spline_sdf.distance_scale,
+				m_spline_sdf.maximum_distance,
 				sdf_bounding_box,
 				get_floor_y(),
 				octree_ptr,
@@ -841,10 +841,10 @@ void Testbed::render_spline(
 
 	ERenderMode render_mode = (visualized_dimension > -1 || m_render_mode == ERenderMode::Slice) ? ERenderMode::EncodingVis : m_render_mode;
 	if (render_mode == ERenderMode::Shade || render_mode == ERenderMode::Normals) {
-		if (m_sdf.analytic_normals || gt_raytrace) {
+		if (m_spline_sdf.analytic_normals || gt_raytrace) {
 			normals_function(n_hit, rays_hit.pos, rays_hit.normal, stream);
 		} else {
-			float fd_normals_epsilon = m_sdf.fd_normals_epsilon;
+			float fd_normals_epsilon = m_spline_sdf.fd_normals_epsilon;
 
 			FiniteDifferenceNormalsApproximator fd_normals;
 			fd_normals.normal(n_hit, distance_function, rays_hit.pos, rays_hit.normal, fd_normals_epsilon, stream);
@@ -857,7 +857,7 @@ void Testbed::render_spline(
 			shadow_tracer.init_rays_from_data(n_hit, rays_hit, stream);
 			shadow_tracer.set_fused_trace_kernel(tracer.fused_trace_kernel());
 			shadow_tracer.set_trace_shadow_rays(true);
-			shadow_tracer.set_shadow_sharpness(m_sdf.shadow_sharpness);
+			shadow_tracer.set_shadow_sharpness(m_spline_sdf.shadow_sharpness);
 			RaysSdfSoa& shadow_rays_init = shadow_tracer.rays_init();
 			linear_kernel(
 				spline_prepare_shadow_rays,
@@ -911,7 +911,7 @@ void Testbed::render_spline(
 		m_aabb,
 		get_floor_y(),
 		render_mode,
-		m_sdf.brdf,
+		m_spline_sdf.brdf,
 		normalize(m_sun_dir),
 		normalize(m_up_dir),
 		camera_matrix,
@@ -1076,12 +1076,6 @@ void Testbed::load_spline(const fs::path& data_path) {
 	);
 }
 
-template<typename T>
-struct hermite_node {
-	T p;
-	T t;
-};
-
 __host__ __device__
 inline vec3 hermite_pos_eval(
 	const hermite_node<vec3> h0,
@@ -1121,6 +1115,7 @@ inline vec3 hermite_tangent_eval(
 			h1.t * dh11;
 
 }
+// P0 (0.315034, 0.500000, 0.500000), P1 (0.500000, 0.500000, 0.500000), M0 (0.110980, 0.000000, 0.000000), M1 (0.083235, 0.000000, 0.000000)
 
 template<typename T> 
 __host__ __device__
@@ -1156,7 +1151,7 @@ vec3 point_on_disk(vec3& pos, vec3& tan, float radius, float theta) {
 
 __global__ void generate_spline_surface_distances(
     uint32_t n_elements,
-    vec3* __restrict__ positions,
+    ngp::Testbed::Spline::TrainingInput* __restrict__ inputs,
     float* __restrict__ distances,
     Testbed::Spline::Point* points,
     int*   indices_flat,
@@ -1173,8 +1168,8 @@ __global__ void generate_spline_surface_distances(
     default_rng_t rng{seed};
     rng.advance(i * 4);             
 
-    // --- pick a segment (for now: just one segment to debug) ---
     uint32_t seg_index = (uint32_t)(random_val(rng) * n_segments);
+	seg_index = min(seg_index, (uint32_t) (n_segments - 1));
 
     uint32_t seg_start = indices_offsets[seg_index];
 
@@ -1187,36 +1182,78 @@ __global__ void generate_spline_surface_distances(
         p0.pos, p1.pos, p2.pos, p3.pos
     );
 
+	const vec3 P0 = hermite_curve.first.p;
+	const vec3 P1 = hermite_curve.second.p;
+	const vec3 M0 = hermite_curve.first.t;
+	const vec3 M1 = hermite_curve.second.t;
+
+	// printf("P0 (%f, %f, %f), P1 (%f, %f, %f), M0 (%f, %f, %f), M1 (%f, %f, %f)\n", P0.x, P0.y, P0.z, P1.x, P1.y, P1.z, M0.x, M0.y, M0.z, M1.x, M1.y, M1.z);
+
     float t = random_val(rng);           
 
     vec3 pos_on_curve     = hermite_pos_eval(hermite_curve.first, hermite_curve.second, t);
     vec3 tangent_on_curve = hermite_tangent_eval(hermite_curve.first, hermite_curve.second, t);
+
+	float tan_len2 = dot(tangent_on_curve, tangent_on_curve);
+	if(tan_len2 > 1e-20f) {
+		tangent_on_curve *= rsqrt(tan_len2);
+	} else {
+		tangent_on_curve = vec3{1.0f, 1.0f, 1.0f};
+	}
 
     float r0 = p0.radius;
 	float r1 = p1.radius;
 	float r2 = p2.radius;
 	float r3 = p3.radius;
 
-	// simple cubic Bézier interpolation of scalar radius
+	float omt = 1.0f - t;
 	float tube_R =
-    	(1-t)*(1-t)*(1-t)*r0 +
-    	3*(1-t)*(1-t)*t*r1 +
-    	3*(1-t)*t*t*r2 +
-    	t*t*t*r3;
+		omt * omt * omt * r0 + 
+		3.0f * omt * omt * t * r1 +
+		3.0f * omt * t * t * r2 + 
+		t * t * t * r3;
+	
+	tube_R = fmaxf(tube_R, 1e-6f);
 
 	float r_min = tube_R * radius_min;
 	float r_max = tube_R * radius_max;
+
     float radius_sample  = r_min + random_val(rng) * (r_max - r_min);
     float theta          = random_val(rng) * 2.0f * PI();
 
     vec3 disk_point = point_on_disk(pos_on_curve, tangent_on_curve, radius_sample, theta);
 
-    positions[i] = disk_point;
-    distances[i] = radius_sample - tube_R; 
+	vec3 local = (disk_point - pos_on_curve) / tube_R;
 
+	float sd = (radius_sample - tube_R) / tube_R;
+
+    // Node A in the same normalization
+    vec3 A_p = (P0 - pos_on_curve) / tube_R;
+    vec3 A_m = M0 / tube_R;
+    float A_r = r0 / tube_R;
+
+    // Node B
+    vec3 B_p = (P1 - pos_on_curve) / tube_R;
+    vec3 B_m = M1 / tube_R;
+    float B_r = r3 / tube_R;
+
+	// Output target
+	ngp::Testbed::Spline::TrainingInput& out = inputs[i];
+
+	out.x = local.x; out.y = local.y; out.z = local.z;
+
+	out.A_px = A_p.x; out.A_py = A_p.y; out.A_pz = A_p.z;
+	out.A_mx = A_m.x; out.A_my = A_m.y; out.A_mz = A_m.z;
+	out.A_r = A_r;
+
+	out.B_px = B_p.x; out.B_py = B_p.y; out.B_pz = B_p.z;
+	out.B_mx = B_m.x; out.B_my = B_m.y; out.B_mz = B_m.z;
+	out.B_r = B_r;
+
+    distances[i] = sd;
 }
 
-void Testbed::generate_training_samples_spline(vec3* positions, float* distances, uint32_t n_to_generate, cudaStream_t stream, bool uniform_only) {
+void Testbed::generate_training_samples_spline(Spline::TrainingInput* inputs, float* distances, uint32_t n_to_generate, cudaStream_t stream, bool uniform_only) {
 	uint32_t n_to_generate_base = n_to_generate / 8;
 	const uint32_t n_to_generate_surface_exact = uniform_only ? 0 : n_to_generate_base * 4;
 	const uint32_t n_to_generate_distance_outside = uniform_only ? 0 : n_to_generate_base * 3;
@@ -1227,8 +1264,8 @@ void Testbed::generate_training_samples_spline(vec3* positions, float* distances
 		0,
 		stream,
 		n_to_generate_surface_exact,
-		m_spline_sdf.training.positions.data(),
-		m_spline_sdf.training.distances.data(),
+		inputs,
+		distances,
 		m_spline_sdf.points_gpu.data(),
 		m_spline_sdf.index_flat.data(),
 		m_spline_sdf.index_offsets.data(),
@@ -1244,8 +1281,8 @@ void Testbed::generate_training_samples_spline(vec3* positions, float* distances
 		0,
 		stream,
 		n_to_generate_distance_outside,
-		m_spline_sdf.training.positions.data() + n_to_generate_surface_exact,
-		m_spline_sdf.training.distances.data()+ n_to_generate_surface_exact,
+		inputs + n_to_generate_surface_exact,
+		distances + n_to_generate_surface_exact,
 		m_spline_sdf.points_gpu.data(),
 		m_spline_sdf.index_flat.data(),
 		m_spline_sdf.index_offsets.data(),
@@ -1261,7 +1298,7 @@ void Testbed::generate_training_samples_spline(vec3* positions, float* distances
 		0,
 		stream,
 		n_to_generate_distance_inside,
-		m_spline_sdf.training.positions.data() + n_to_generate_surface_exact + n_to_generate_distance_outside,
+		m_spline_sdf.training.inputs.data() + n_to_generate_surface_exact + n_to_generate_distance_outside,
 		m_spline_sdf.training.distances.data()+ n_to_generate_surface_exact + n_to_generate_distance_outside,
 		m_spline_sdf.points_gpu.data(),
 		m_spline_sdf.index_flat.data(),
@@ -1278,7 +1315,7 @@ void Testbed::generate_training_samples_spline(vec3* positions, float* distances
 
 void Testbed::train_spline(size_t target_batch_size, bool get_loss_scalar, cudaStream_t stream) {
 	const uint32_t n_output_dims = 1;
-	const uint32_t n_input_dims = 3;
+	const uint32_t n_input_dims = 17;
 
 	if (m_spline_sdf.training.size >= target_batch_size) {
 		// Auxiliary matrices for training
@@ -1286,14 +1323,14 @@ void Testbed::train_spline(size_t target_batch_size, bool get_loss_scalar, cudaS
 
 		// Permute all training records to de-correlate training data
 		linear_kernel(
-			shuffle<vec3>,
+			shuffle<Spline::TrainingInput>,
 			0,
 			stream,
 			m_spline_sdf.training.size,
 			1,
 			m_training_step,
-			m_spline_sdf.training.positions.data(),
-			m_spline_sdf.training.positions_shuffled.data()
+			m_spline_sdf.training.inputs.data(),
+			m_spline_sdf.training.inputs_shuffled.data()
 		);
 		linear_kernel(
 			shuffle<float>,
@@ -1307,7 +1344,7 @@ void Testbed::train_spline(size_t target_batch_size, bool get_loss_scalar, cudaS
 		);
 
 		GPUMatrix<float> training_target_matrix(m_spline_sdf.training.distances_shuffled.data(), n_output_dims, batch_size);
-		GPUMatrix<float> training_batch_matrix((float*)(m_spline_sdf.training.positions_shuffled.data()), n_input_dims, batch_size);
+		GPUMatrix<float> training_batch_matrix((float*)(m_spline_sdf.training.inputs_shuffled.data()), n_input_dims, batch_size);
 
 		auto ctx = m_trainer->training_step(stream, training_batch_matrix, training_target_matrix);
 
@@ -1322,16 +1359,14 @@ void Testbed::train_spline(size_t target_batch_size, bool get_loss_scalar, cudaS
 void Testbed::training_prep_spline(uint32_t batch_size, cudaStream_t stream) {
 	if (m_spline_sdf.training.generate_sdf_data_online) {
 		m_spline_sdf.training.size = batch_size;
-		m_spline_sdf.training.positions.enlarge(m_spline_sdf.training.size);
-		m_spline_sdf.training.positions_shuffled.enlarge(m_spline_sdf.training.size);
+		m_spline_sdf.training.inputs.enlarge(m_spline_sdf.training.size);
+		m_spline_sdf.training.inputs_shuffled.enlarge(m_spline_sdf.training.size);
 		m_spline_sdf.training.distances.enlarge(m_spline_sdf.training.size);
 		m_spline_sdf.training.distances_shuffled.enlarge(m_spline_sdf.training.size);
 
 		generate_training_samples_spline(
-			m_spline_sdf.training.positions.data(), m_spline_sdf.training.distances.data(), batch_size, stream, false
+			m_spline_sdf.training.inputs.data(), m_spline_sdf.training.distances.data(), batch_size, stream, false
 		);
-
-
 	}
 }
 
