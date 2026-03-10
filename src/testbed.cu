@@ -173,6 +173,7 @@ void Testbed::load_training_data(const fs::path& path) {
 		case ETestbedMode::Image: load_image(path); break;
 		case ETestbedMode::Volume: load_volume(path); break;
 		case ETestbedMode::Spline: load_spline(path); break;
+		case ETestbedMode::Sphere: load_sphere(path); break;
 		default: throw std::runtime_error{"Invalid testbed mode."};
 	}
 
@@ -1630,81 +1631,21 @@ void Testbed::imgui() {
 		if (m_testbed_mode == ETestbedMode::Spline && ImGui::TreeNode("Spline Segment settings")) {
 			HermiteSegment& seg = m_spline_sdf.m_current_render_target;
 			HermiteNode& A = seg.a;
-			HermiteNode& B = seg.b;
+			HermiteNode& B = seg.b;	
 
-			auto len3 = [](const vec3& v) {
-				return sqrtf(v.x*v.x + v.y*v.y + v.z*v.z);
-			};
-			auto normalize3 = [&](const vec3& v) {
-				float l = len3(v);
-				if (l < 1e-20f) return vec3{1.0f, 0.0f, 0.0f};
-				float inv = 1.0f / l;
-				return vec3{v.x*inv, v.y*inv, v.z*inv};
-			};
-			auto clamp_tangent_len = [&](vec3 v, float max_len) {
-				float l = len3(v);
-				if (l < 1e-20f) return vec3{0.0f, 0.0f, 0.0f};
-				if (l <= max_len) return v;
-				float s = max_len / l;
-				return vec3{v.x*s, v.y*s, v.z*s};
-			};
+			ImGui::SliderFloat("M0.x", &seg.a.m.x, 0.0, 1.0, "%.2f");
+			ImGui::SliderFloat("M0.y", &seg.a.m.y, 0.0, 1.0, "%.2f");
+			ImGui::SliderFloat("M0.z", &seg.a.m.z, 0.0, 1.0, "%.2f");
 
-			// --- Derived quantities ---
-			vec3 AB = vec3{B.p.x - A.p.x, B.p.y - A.p.y, B.p.z - A.p.z};
-			float segment_len = fmaxf(len3(AB), 1e-6f);
+			ImGui::TreePop();
+		}
 
-			static bool edit_tangent_as_dir_len = true;
+		if (m_testbed_mode == ETestbedMode::Sphere && ImGui::TreeNode("Sphere settings")) {
+			float& radius = m_sphere_sdf.m_current_render_target_radius;
+			vec3& pos = m_sphere_sdf.m_current_render_target_pos;
 
-			ImGui::Text("Derived");
-			ImGui::Text("Segment length: %.6f", segment_len);
-			ImGui::Separator();
-
-			auto draw_node = [&](const char* label, HermiteNode& n, const vec3& default_dir) {
-				if (!ImGui::TreeNode(label)) return;
-
-				// --- Position ---
-				ImGui::TextUnformatted("Position");
-				ImGui::SliderFloat3("p", &n.p.x, -1.0, 1.0, "%.6f");
-
-				ImGui::Separator();
-
-				// --- Tangent ---
-				ImGui::TextUnformatted("Tangent");
-				ImGui::SliderFloat3("m", &n.m.x, -1.0, 1.0, "%.6f");
-
-				ImGui::Separator();
-
-				// --- Radius ---
-				ImGui::TextUnformatted("Radius");
-				ImGui::SliderFloat("r", &n.r, 0.05, 1.0, "%.6f");
-
-				// Convenience buttons
-				if (ImGui::Button("Reset tangent")) {
-					float default_len = 0.5f * segment_len;
-					n.m = vec3{default_dir.x*default_len, default_dir.y*default_len, default_dir.z*default_len};
-				}
-				ImGui::SameLine();
-				if (ImGui::Button("Reset radius")) {
-					n.r = 0.5f;
-				}
-
-				ImGui::TreePop();
-			};
-
-			vec3 dirAB = normalize3(AB);
-			vec3 dirBA = vec3{-dirAB.x, -dirAB.y, -dirAB.z};
-
-			draw_node("Hermite Node A", m_spline_sdf.m_current_render_target.a, dirAB);
-			draw_node("Hermite Node B", m_spline_sdf.m_current_render_target.b, dirBA);
-
-			ImGui::Separator();
-
-			if (ImGui::TreeNode("Normalization targets (debug)")) {
-				ImGui::BulletText("NN input: [x', y', z', A.p', A.m', A.r', B.p', B.m', B.r']");
-				ImGui::BulletText("Query domain: approx [-1.2, 1.2]^3");
-				ImGui::BulletText("Distance: d_world = k_s * d_norm");
-				ImGui::TreePop();
-			}
+			accum_reset |= ImGui::SliderFloat("Radius", &radius, 0.01, 0.25, "%.3f");
+			accum_reset |= ImGui::SliderFloat3("Position", &pos.x, 0.00, 1.00, "%.3f");
 
 			ImGui::TreePop();
 		}
@@ -4203,6 +4144,7 @@ Testbed::NetworkDims Testbed::network_dims() const {
 		case ETestbedMode::Image: return network_dims_image(); break;
 		case ETestbedMode::Volume: return network_dims_volume(); break;
 		case ETestbedMode::Spline: return network_dims_spline_sdf(); break;
+		case ETestbedMode::Sphere: return network_dims_sphere_sdf(); break;
 		default: throw std::runtime_error{"Invalid mode."};
 	}
 }
@@ -4657,6 +4599,7 @@ void Testbed::train(uint32_t batch_size) {
 			case ETestbedMode::Image: training_prep_image(batch_size, m_stream.get()); break;
 			case ETestbedMode::Volume: training_prep_volume(batch_size, m_stream.get()); break;
 			case ETestbedMode::Spline: training_prep_spline(batch_size, m_stream.get()); break;
+			case ETestbedMode::Sphere: training_prep_sphere(batch_size, m_stream.get()); break;
 			default: throw std::runtime_error{"Invalid training mode."};
 		}
 
@@ -4686,6 +4629,7 @@ void Testbed::train(uint32_t batch_size) {
 			case ETestbedMode::Image: train_image(batch_size, get_loss_scalar, m_stream.get()); break;
 			case ETestbedMode::Volume: train_volume(batch_size, get_loss_scalar, m_stream.get()); break;
 			case ETestbedMode::Spline: train_spline(batch_size, get_loss_scalar, m_stream.get()); break;
+			case ETestbedMode::Sphere: train_sphere(batch_size, get_loss_scalar, m_stream.get()); break;
 			default: throw std::runtime_error{"Invalid training mode."};
 		}
 
@@ -4957,169 +4901,68 @@ void pack_inputs_hermite_segment
 (
 	uint32_t n_elements,
 	const vec3* __restrict__ positions,
-	HermiteSegment seg,
+	float* extra14,
 	float* __restrict__ out
 ) {
 	const uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
 	if(i >= n_elements) return;
+	 const uint32_t base = i * 17;
 
-	const uint32_t stride = n_elements;
+    const vec3 x = positions[i];
 
-	const vec3 x = positions[i];
-
-	// 0..2: query position
-    out[0 * stride + i] = x.x;
-    out[1 * stride + i] = x.y;
-    out[2 * stride + i] = x.z;
+    // 0..2: query position
+    out[base + 0] = x.x;
+    out[base + 1] = x.y;
+    out[base + 2] = x.z;
 
     // 3..9: node A
-    out[3 * stride + i] = seg.a.p.x;
-    out[4 * stride + i] = seg.a.p.y;
-    out[5 * stride + i] = seg.a.p.z;
+    out[base + 3] = extra14[0];
+    out[base + 4] = extra14[1];
+    out[base + 5] = extra14[2];
 
-    out[6 * stride + i] = seg.a.m.x;
-    out[7 * stride + i] = seg.a.m.y;
-    out[8 * stride + i] = seg.a.m.z;
+    out[base + 6] = extra14[3];
+    out[base + 7] = extra14[4];
+    out[base + 8] = extra14[5];
 
-    out[9 * stride + i] = seg.a.r;
+    out[base + 9] = extra14[6];
 
     // 10..16: node B
-    out[10 * stride + i] = seg.b.p.x;
-    out[11 * stride + i] = seg.b.p.y;
-    out[12 * stride + i] = seg.b.p.z;
+    out[base + 10] = extra14[7];
+    out[base + 11] = extra14[8];
+    out[base + 12] = extra14[9];
 
-    out[13 * stride + i] = seg.b.m.x;
-    out[14 * stride + i] = seg.b.m.y;
-    out[15 * stride + i] = seg.b.m.z;
+    out[base + 13] = extra14[10];
+    out[base + 14] = extra14[11];
+    out[base + 15] = extra14[12];
 
-    out[16 * stride + i] = seg.b.r;
-	// printf("PACKING: (X: %f, Y: %f, Z: %f, A.px: %f, A.py: %f, A.pz: %f, A.mx: %f, A.my: %f, A.mz: %f, A.r: %f, B.px: %f, B.py: %f, B.pz: %f, B.mx: %f, B.my: %f, B.mz: %f, B.r: %f\n)", 
-	// 	x.x, x.y, x.z, 
-	// 	seg.a.p.x, seg.a.p.y, seg.a.p.z, 
-	// 	seg.a.m.x, seg.a.m.y, seg.a.m.z,
-	// 	seg.a.r,
-	// 	seg.b.p.x, seg.b.p.y, seg.b.p.z, 
-	// 	seg.b.m.x, seg.b.m.y, seg.b.m.z,
-	// 	seg.b.r);
+    out[base + 16] = extra14[13];
 }
 
+
+
 __global__
-void pack_inputs_hermite_segment_row_major(
+void pack_inputs_sphere
+(
 	uint32_t n_elements,
 	const vec3* __restrict__ positions,
-	HermiteSegment seg,
+	float* extra4,
 	float* __restrict__ out
 ) {
 	const uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
-	if (i >= n_elements) return;
+	if(i >= n_elements) return;
+	 const uint32_t base = i * 7;
 
-	const uint32_t stride = 17; // features per sample
-	float* dst = out + i * stride;
+    const vec3 x = positions[i];
 
-	const vec3 x = positions[i];
+    // 0..2: query position
+    out[base + 0] = x.x;
+    out[base + 1] = x.y;
+    out[base + 2] = x.z;
 
-	dst[0]  = x.x;
-	dst[1]  = x.y;
-	dst[2]  = x.z;
-
-	dst[3]  = seg.a.p.x;
-	dst[4]  = seg.a.p.y;
-	dst[5]  = seg.a.p.z;
-
-	dst[6]  = seg.a.m.x;
-	dst[7]  = seg.a.m.y;
-	dst[8]  = seg.a.m.z;
-
-	dst[9]  = seg.a.r;
-
-	dst[10] = seg.b.p.x;
-	dst[11] = seg.b.p.y;
-	dst[12] = seg.b.p.z;
-
-	dst[13] = seg.b.m.x;
-	dst[14] = seg.b.m.y;
-	dst[15] = seg.b.m.z;
-
-	dst[16] = seg.b.r;
-}
-
-void pack_inputs_hermite_segment_cpu(
-	uint32_t n_elements,
-	const vec3* positions,
-	const HermiteSegment& seg,
-	float* out
-) {
-	const uint32_t stride = n_elements;
-
-	for (uint32_t i = 0; i < n_elements; ++i) {
-		const vec3& x = positions[i];
-
-		// 0..2: query position
-		out[0  * stride + i] = x.x;
-		out[1  * stride + i] = x.y;
-		out[2  * stride + i] = x.z;
-
-		// 3..9: node A
-		out[3  * stride + i] = seg.a.p.x;
-		out[4  * stride + i] = seg.a.p.y;
-		out[5  * stride + i] = seg.a.p.z;
-
-		out[6  * stride + i] = seg.a.m.x;
-		out[7  * stride + i] = seg.a.m.y;
-		out[8  * stride + i] = seg.a.m.z;
-
-		out[9  * stride + i] = seg.a.r;
-
-		// 10..16: node B
-		out[10 * stride + i] = seg.b.p.x;
-		out[11 * stride + i] = seg.b.p.y;
-		out[12 * stride + i] = seg.b.p.z;
-
-		out[13 * stride + i] = seg.b.m.x;
-		out[14 * stride + i] = seg.b.m.y;
-		out[15 * stride + i] = seg.b.m.z;
-
-		out[16 * stride + i] = seg.b.r;
-	}
-}
-
-void print_gpu_sample_column_major(
-	const float* device_ptr,   // GPU pointer
-	uint32_t n_features,        // e.g. 17
-	uint32_t n_elements,        // padded batch size
-	uint32_t sample_index,      // which sample to print
-	cudaStream_t stream = 0
-) {
-	if (sample_index >= n_elements) {
-		std::cout << "sample_index out of range\n";
-		return;
-	}
-
-	// Copy only the values we need: one value per feature
-	std::vector<float> host(n_features);
-
-	for (uint32_t f = 0; f < n_features; ++f) {
-		cudaMemcpyAsync(
-			&host[f],
-			device_ptr + f * n_elements + sample_index,
-			sizeof(float),
-			cudaMemcpyDeviceToHost,
-			stream
-		);
-	}
-
-	cudaStreamSynchronize(stream);
-
-	std::cout << "GPU sample " << sample_index << ":\n";
-	for (uint32_t f = 0; f < n_features; ++f) {
-		std::cout << "  f[" << f << "] = " << host[f] << "\n";
-	}
-}
-
-__global__ void force_feature(uint32_t n, float* inputs, uint32_t feature, float value) {
-	uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
-	if (i >= n) return;
-	inputs[(size_t)feature * n + i] = value;
+    out[base + 3] = extra4[0];
+    out[base + 4] = extra4[1];
+    out[base + 5] = extra4[2];
+    out[base + 6] = extra4[3];
 }
 
 void Testbed::render_frame_main(
@@ -5201,43 +5044,107 @@ void Testbed::render_frame_main(
 			);
 		} break;
 		case ETestbedMode::Spline: {
-			distance_fun_t distance_fun = m_render_ground_truth ?
-				(distance_fun_t)[&](uint32_t n_elements, const vec3* positions, float* distances, cudaStream_t stream) {
-				m_sdf.triangle_bvh->signed_distance_gpu(
-					n_elements, m_sdf.mesh_sdf_mode, positions, distances, m_sdf.triangles_gpu.data(), false, stream
-				);
-			} : (distance_fun_t)[&](uint32_t n_elements, const vec3* positions, float* distances, cudaStream_t stream) {
+			distance_fun_spline_t distance_fun = (distance_fun_spline_t)[&](uint32_t n_elements, const vec3* positions, float* distances, cudaStream_t stream) {
+				float* extra14 = m_spline_sdf.extra_dims.data();
 				n_elements = next_multiple(n_elements, BATCH_SIZE_GRANULARITY);
 				m_spline_sdf.inference_inputs.resize((size_t) 17 * (size_t) n_elements); // 17 input dimensions
-				
-				linear_kernel(pack_inputs_hermite_segment, 0, stream, n_elements, positions, m_spline_sdf.m_current_render_target, reinterpret_cast<float*>(m_spline_sdf.inference_inputs.data()));
-
-				linear_kernel(force_feature, 0, stream, n_elements, reinterpret_cast<float*>(m_spline_sdf.inference_inputs.data()), 8, 1);
-
-				print_gpu_sample_column_major(reinterpret_cast<float*>(m_spline_sdf.inference_inputs.data()), 17, n_elements, 0, stream);
-
+				GPUMemory<float> extra14_gpu;
+				extra14_gpu.resize((size_t) 14 * sizeof(float));
+				CUDA_CHECK_THROW(cudaMemcpyAsync(
+					extra14_gpu.data(),
+					extra14,
+					14 * sizeof(float),
+					cudaMemcpyHostToDevice,
+					stream
+				));
+				linear_kernel(pack_inputs_hermite_segment, 0, stream, n_elements, positions, extra14_gpu.data(), reinterpret_cast<float*>(m_spline_sdf.inference_inputs.data()));
 				GPUMatrix<float> input_matrix(reinterpret_cast<float*>(m_spline_sdf.inference_inputs.data()), 17, n_elements);
 
 				GPUMatrix<float, RM> distances_matrix(distances, 1, n_elements);
 				m_network->inference(stream, input_matrix, distances_matrix);
 			};
 
-			normals_fun_t normals_fun = m_render_ground_truth ?
-				(normals_fun_t)[&](uint32_t n_elements, const vec3* positions, vec3* normals, cudaStream_t stream){
-					// NO-OP. Normals will automatically be populated by raytrace
-				} :
-				(normals_fun_t)[&](uint32_t n_elements, const vec3* positions, vec3* normals, cudaStream_t stream) {
+			normals_fun_spline_t normals_fun = 
+				(normals_fun_spline_t)[&](uint32_t n_elements, const vec3* positions, vec3* normals, cudaStream_t stream) {
+				float* extra14 = m_spline_sdf.extra_dims.data();
 				n_elements = next_multiple(n_elements, BATCH_SIZE_GRANULARITY);
 				m_spline_sdf.inference_inputs.resize((size_t) 17 * (size_t) n_elements); // 17 input dimensions
 
-				linear_kernel(pack_inputs_hermite_segment, 0, stream, n_elements, positions, m_spline_sdf.m_current_render_target, reinterpret_cast<float*>(m_spline_sdf.inference_inputs.data()));
+				GPUMemory<float> extra14_gpu;
+				extra14_gpu.resize((size_t) 14 * sizeof(float));
+				CUDA_CHECK_THROW(cudaMemcpyAsync(
+					extra14_gpu.data(),
+					extra14,
+					14 * sizeof(float),
+					cudaMemcpyHostToDevice,
+					stream
+				));
+				linear_kernel(pack_inputs_hermite_segment, 0, stream, n_elements, positions, extra14_gpu.data(), reinterpret_cast<float*>(m_spline_sdf.inference_inputs.data()));
 
 				GPUMatrix<float> input_matrix(reinterpret_cast<float*>(m_spline_sdf.inference_inputs.data()), 17, n_elements);
 				GPUMatrix<float> normals_matrix((float*)normals, 3, n_elements);
 				m_network->input_gradient(stream, 0, input_matrix, normals_matrix);
 			};
 
-			render_sdf(
+			render_spline(
+				device.stream(),
+				device,
+				distance_fun,
+				normals_fun,
+				device.render_buffer_view(),
+				focal_length,
+				camera_matrix0,
+				screen_center,
+				foveation,
+				lens,
+				visualized_dimension
+			);
+		} break;
+
+		case ETestbedMode::Sphere: {
+			distance_fun_spline_t distance_fun = (distance_fun_spline_t)[&](uint32_t n_elements, const vec3* positions, float* distances, cudaStream_t stream) {
+				float* extra4 = m_sphere_sdf.extra_dims.data();
+				n_elements = next_multiple(n_elements, BATCH_SIZE_GRANULARITY);
+				m_sphere_sdf.inference_inputs.resize((size_t) 7 * (size_t) n_elements); // 4 input dimensions
+				GPUMemory<float> extra4_gpu;
+				extra4_gpu.resize((size_t) 4 * sizeof(float));
+				CUDA_CHECK_THROW(cudaMemcpyAsync(
+					extra4_gpu.data(),
+					extra4,
+					4 * sizeof(float),
+					cudaMemcpyHostToDevice,
+					stream
+				));
+				linear_kernel(pack_inputs_sphere, 0, stream, n_elements, positions, extra4_gpu.data(), reinterpret_cast<float*>(m_sphere_sdf.inference_inputs.data()));
+				GPUMatrix<float> input_matrix(reinterpret_cast<float*>(m_sphere_sdf.inference_inputs.data()), 7, n_elements);
+
+				GPUMatrix<float, RM> distances_matrix(distances, 1, n_elements);
+				m_network->inference(stream, input_matrix, distances_matrix);
+			};
+
+			normals_fun_spline_t normals_fun = 
+				(normals_fun_spline_t)[&](uint32_t n_elements, const vec3* positions, vec3* normals, cudaStream_t stream) {
+				float* extra4 = m_sphere_sdf.extra_dims.data();
+				n_elements = next_multiple(n_elements, BATCH_SIZE_GRANULARITY);
+				m_sphere_sdf.inference_inputs.resize((size_t) 7 * (size_t) n_elements); // 7 input dimensions
+
+				GPUMemory<float> extra4_gpu;
+				extra4_gpu.resize((size_t) 4 * sizeof(float));
+				CUDA_CHECK_THROW(cudaMemcpyAsync(
+					extra4_gpu.data(),
+					extra4,
+					4 * sizeof(float),
+					cudaMemcpyHostToDevice,
+					stream
+				));
+				linear_kernel(pack_inputs_sphere, 0, stream, n_elements, positions, extra4_gpu.data(), reinterpret_cast<float*>(m_sphere_sdf.inference_inputs.data()));
+
+				GPUMatrix<float> input_matrix(reinterpret_cast<float*>(m_sphere_sdf.inference_inputs.data()), 7, n_elements);
+				GPUMatrix<float> normals_matrix((float*)normals, 3, n_elements);
+				m_network->input_gradient(stream, 0, input_matrix, normals_matrix);
+			};
+
+			render_sphere(
 				device.stream(),
 				device,
 				distance_fun,

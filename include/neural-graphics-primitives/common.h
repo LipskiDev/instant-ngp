@@ -152,6 +152,7 @@ enum class ETestbedMode : int {
 	Image,
 	Volume,
 	Spline,
+	Sphere,
 	None,
 };
 

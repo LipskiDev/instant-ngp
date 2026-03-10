@@ -277,6 +277,7 @@ list(APPEND NGP_SOURCES
 	src/testbed_sdf.cu
 	src/testbed_volume.cu
 	src/testbed_spline.cu
+	src/testbed_sphere.cu
 	src/thread_pool.cpp
 	src/tinyexr_wrapper.cu
 	src/tinyobj_loader_wrapper.cu

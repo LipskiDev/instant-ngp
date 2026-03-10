@@ -154,8 +154,9 @@ ETestbedMode mode_from_scene(const std::string& scene) {
 	} else if (equals_case_insensitive(scene_path.extension(), "nvdb")) {
 		return ETestbedMode::Volume;
 	} else if (equals_case_insensitive(scene_path.extension(), "bezdat")) {
-		tlog::info() << "SPLINE SCENE";
 		return ETestbedMode::Spline;
+	} else if (equals_case_insensitive(scene_path.extension(), "sphere")) {
+		return ETestbedMode::Sphere;
 	} else { // probably an image. Too bothersome to list all supported ones: exr, bin, jpg, png, tga, hdr, ...
 		return ETestbedMode::Image;
 	}
@@ -172,6 +173,8 @@ ETestbedMode mode_from_string(const std::string& str) {
 		return ETestbedMode::Volume;
 	} else if (equals_case_insensitive(str, "spline")) {
 		return ETestbedMode::Spline;
+	} else if (equals_case_insensitive(str, "sphere")) {
+		return ETestbedMode::Sphere;
 	} else {
 		return ETestbedMode::None;
 	}
@@ -184,6 +187,7 @@ std::string to_string(ETestbedMode mode) {
 		case ETestbedMode::Image: return "image";
 		case ETestbedMode::Volume: return "volume";
 		case ETestbedMode::Spline: return "spline";
+		case ETestbedMode::Sphere: return "sphere";
 		case ETestbedMode::None: return "none";
 		default: throw std::runtime_error{fmt::format("Can not convert mode {} to string.", (int)mode)};
 	}

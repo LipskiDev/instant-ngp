@@ -76,7 +76,7 @@ struct hermite_node {
 
 struct HermiteNode{
 	vec3 p; // position
-	vec3 m; // tangent
+	vec3 m = vec3(0.0, 0.0, 1.0); // tangent
 	float r; // radius
 };
 
@@ -108,6 +108,8 @@ public:
 
 	using distance_fun_t = std::function<void(uint32_t, const vec3*, float*, cudaStream_t)>;
 	using normals_fun_t = std::function<void(uint32_t, const vec3*, vec3*, cudaStream_t)>;
+	using distance_fun_spline_t = std::function<void(uint32_t, const vec3*, float*, cudaStream_t)>;
+	using normals_fun_spline_t = std::function<void(uint32_t, const vec3*, vec3*, cudaStream_t)>;
 
 	class SphereTracer {
 	public:
@@ -162,6 +164,146 @@ public:
 		CudaRtcKernel* fused_trace_kernel() { return m_fused_trace_kernel; }
 
 	private:
+		RaysSdfSoa m_rays[2];
+		RaysSdfSoa m_rays_hit;
+		uint32_t* m_hit_counter;
+		uint32_t* m_alive_counter;
+
+		uint32_t m_n_rays_initialized = 0;
+		ivec2 m_resolution = {0, 0};
+
+		float m_shadow_sharpness = 2048.f;
+		bool m_trace_shadow_rays = false;
+
+		GPUMemoryArena::Allocation m_scratch_alloc;
+		CudaRtcKernel* m_fused_trace_kernel = nullptr;
+	};
+
+	class SphereTracerSpline {
+	public:
+		explicit SphereTracerSpline(Testbed* owner) : m_owner{owner} {}
+
+		void init_rays_from_camera(
+			uint32_t spp,
+			const ivec2& resolution,
+			const vec2& focal_length,
+			const mat4x3& camera_matrix,
+			const vec2& screen_center,
+			const vec3& parallax_shift,
+			bool snap_to_pixel_centers,
+			const BoundingBox& aabb,
+			float floor_y,
+			float near_distance,
+			float plane_z,
+			float aperture_size,
+			const Foveation& foveation,
+			const Buffer2DView<const vec4>& envmap,
+			vec4* frame_buffer,
+			float* depth_buffer,
+			const Buffer2DView<const uint8_t>& hidden_area_mask,
+			const Lens& lens,
+			const TriangleOctree* octree,
+			uint32_t n_octree_levels,
+			cudaStream_t stream
+		);
+
+		void init_rays_from_data(uint32_t n_elements, const RaysSdfSoa& data, cudaStream_t stream);
+		uint32_t trace_bvh(TriangleBvh* bvh, const Triangle* triangles, cudaStream_t stream);
+		uint32_t trace(
+			const distance_fun_spline_t& distance_function,
+			const Network<float, network_precision_t>* network,
+			float zero_offset,
+			float distance_scale,
+			float maximum_distance,
+			const BoundingBox& aabb,
+			const float floor_y,
+			const TriangleOctree* octree,
+			uint32_t n_octree_levels,
+			cudaStream_t stream
+		);
+		void enlarge(size_t n_elements, cudaStream_t stream);
+		RaysSdfSoa& rays_hit() { return m_rays_hit; }
+		RaysSdfSoa& rays_init() { return m_rays[0]; }
+		uint32_t n_rays_initialized() const { return m_n_rays_initialized; }
+		void set_trace_shadow_rays(bool val) { m_trace_shadow_rays = val; }
+		void set_shadow_sharpness(float val) { m_shadow_sharpness = val; }
+
+		void set_fused_trace_kernel(CudaRtcKernel* kernel) { m_fused_trace_kernel = kernel; }
+		CudaRtcKernel* fused_trace_kernel() { return m_fused_trace_kernel; }
+
+	private:
+		Testbed* m_owner = nullptr;
+
+		RaysSdfSoa m_rays[2];
+		RaysSdfSoa m_rays_hit;
+		uint32_t* m_hit_counter;
+		uint32_t* m_alive_counter;
+
+		uint32_t m_n_rays_initialized = 0;
+		ivec2 m_resolution = {0, 0};
+
+		float m_shadow_sharpness = 2048.f;
+		bool m_trace_shadow_rays = false;
+
+		GPUMemoryArena::Allocation m_scratch_alloc;
+		CudaRtcKernel* m_fused_trace_kernel = nullptr;
+	};
+
+	class SphereTracerSphere {
+	public:
+		explicit SphereTracerSphere(Testbed* owner) : m_owner{owner} {}
+
+		void init_rays_from_camera(
+			uint32_t spp,
+			const ivec2& resolution,
+			const vec2& focal_length,
+			const mat4x3& camera_matrix,
+			const vec2& screen_center,
+			const vec3& parallax_shift,
+			bool snap_to_pixel_centers,
+			const BoundingBox& aabb,
+			float floor_y,
+			float near_distance,
+			float plane_z,
+			float aperture_size,
+			const Foveation& foveation,
+			const Buffer2DView<const vec4>& envmap,
+			vec4* frame_buffer,
+			float* depth_buffer,
+			const Buffer2DView<const uint8_t>& hidden_area_mask,
+			const Lens& lens,
+			const TriangleOctree* octree,
+			uint32_t n_octree_levels,
+			cudaStream_t stream
+		);
+
+		void init_rays_from_data(uint32_t n_elements, const RaysSdfSoa& data, cudaStream_t stream);
+		uint32_t trace_bvh(TriangleBvh* bvh, const Triangle* triangles, cudaStream_t stream);
+		uint32_t trace(
+			const distance_fun_spline_t& distance_function,
+			const Network<float, network_precision_t>* network,
+			float zero_offset,
+			float distance_scale,
+			float maximum_distance,
+			const BoundingBox& aabb,
+			const float floor_y,
+			const TriangleOctree* octree,
+			uint32_t n_octree_levels,
+			cudaStream_t stream
+		);
+		void enlarge(size_t n_elements, cudaStream_t stream);
+		RaysSdfSoa& rays_hit() { return m_rays_hit; }
+		RaysSdfSoa& rays_init() { return m_rays[0]; }
+		uint32_t n_rays_initialized() const { return m_n_rays_initialized; }
+		void set_trace_shadow_rays(bool val) { m_trace_shadow_rays = val; }
+		void set_shadow_sharpness(float val) { m_shadow_sharpness = val; }
+
+		void set_fused_trace_kernel(CudaRtcKernel* kernel) { m_fused_trace_kernel = kernel; }
+		CudaRtcKernel* fused_trace_kernel() { return m_fused_trace_kernel; }
+
+	private:
+		Testbed* m_owner = nullptr;
+
 		RaysSdfSoa m_rays[2];
 		RaysSdfSoa m_rays_hit;
 		uint32_t* m_hit_counter;
@@ -338,6 +480,7 @@ public:
 	NetworkDims network_dims_image() const;
 	NetworkDims network_dims_nerf() const;
 	NetworkDims network_dims_spline_sdf() const;
+	NetworkDims network_dims_sphere_sdf() const;
 
 	NetworkDims network_dims() const;
 
@@ -376,8 +519,21 @@ public:
 	void render_spline(
 		cudaStream_t stream,
 		CudaDevice& device,
-		const distance_fun_t& distance_function,
-		const normals_fun_t& normals_function,
+		const distance_fun_spline_t& distance_function,
+		const normals_fun_spline_t& normals_function,
+		const CudaRenderBufferView& render_buffer,
+		const vec2& focal_length,
+		const mat4x3& camera_matrix,
+		const vec2& screen_center,
+		const Foveation& foveation,
+		const Lens& lens,
+		int visualized_dimension
+	);
+	void render_sphere(
+		cudaStream_t stream,
+		CudaDevice& device,
+		const distance_fun_spline_t& distance_function,
+		const normals_fun_spline_t& normals_function,
 		const CudaRenderBufferView& render_buffer,
 		const vec2& focal_length,
 		const mat4x3& camera_matrix,
@@ -466,6 +622,7 @@ public:
 	void load_nerf(const fs::path& data_path);
 	void load_nerf_post();
 	void load_spline(const fs::path& data_path);
+	void load_sphere(const fs::path& data_path);
 	void load_mesh(const fs::path& data_path);
 	void set_exposure(float exposure) { m_exposure = exposure; }
 	void set_max_level(float maxlevel);
@@ -519,6 +676,7 @@ public:
 	void train_sdf(size_t target_batch_size, bool get_loss_scalar, cudaStream_t stream);
 	void train_image(size_t target_batch_size, bool get_loss_scalar, cudaStream_t stream);
 	void train_spline(size_t target_batch_size, bool get_loss_scalar, cudaStream_t stream);
+	void train_sphere(size_t target_batch_size, bool get_loss_scalar, cudaStream_t stream);
 	void set_train(bool mtrain);
 
 	template <typename T> void dump_parameters_as_images(const T* params, const std::string& filename_base);
@@ -530,6 +688,7 @@ public:
 	void training_prep_sdf(uint32_t batch_size, cudaStream_t stream);
 	void training_prep_image(uint32_t batch_size, cudaStream_t stream) {}
 	void training_prep_spline(uint32_t batch_size, cudaStream_t stream);
+	void training_prep_sphere(uint32_t batch_size, cudaStream_t stream);
 	void train(uint32_t batch_size);
 	vec2 calc_focal_length(const ivec2& resolution, const vec2& relative_focal_length, int fov_axis, float zoom) const;
 	vec2 render_screen_center(const vec2& screen_center) const;
@@ -1057,7 +1216,8 @@ public:
 		};
 
 		GPUMemory<TrainingInput> inference_inputs;
-		HermiteSegment m_current_render_target;
+		GPUMemory<float> extra_dims;
+		HermiteSegment m_current_render_target{{{0.5, 0.5, 0.0}, {0.0, 0.0, 1.0}, 0.25}, {{0.5, 0.5, 1.0}, {0.0, 0.0, 1.0}, 0.25}};
 
 		float shadow_sharpness = 2048.0f;
 		float maximum_distance = 0.00005f;
@@ -1107,7 +1267,77 @@ public:
 		} training = {};
 	} m_spline_sdf;
 
+
+	struct Sphere {
+		struct TrainingInput {
+			// Sample Position
+			float x;
+			float y;
+			float z;
+
+			float r;
+			float pos_x;
+			float pos_y;
+			float pos_z;
+		};
+
+		GPUMemory<TrainingInput> inference_inputs;
+		GPUMemory<float> extra_dims;
+		float m_current_render_target_radius = 0.1f;
+		vec3 m_current_render_target_pos = {0.5f, 0.5f, 0.5f};
+
+		float shadow_sharpness = 2048.0f;
+		float maximum_distance = 0.00005f;
+		float fd_normals_epsilon = 0.0005f;
+
+		ESDFGroundTruthMode groundtruth_mode = ESDFGroundTruthMode::RaytracedMesh;
+
+		BRDFParams brdf;
+
+		// Mesh data
+		EMeshSdfMode mesh_sdf_mode = EMeshSdfMode::Raystab;
+		float mesh_scale;
+
+		GPUMemory<Triangle> triangles_gpu;
+		std::vector<Triangle> triangles_cpu;
+		std::vector<float> triangle_weights;
+		DiscreteDistribution triangle_distribution;
+		GPUMemory<float> triangle_cdf;
+		std::shared_ptr<TriangleBvh> triangle_bvh; // unique_ptr
+
+		bool uses_takikawa_encoding = false;
+		bool use_triangle_octree = false;
+		int octree_depth_target = 0; // we duplicate this state so that you can waggle the slider without triggering it immediately
+		std::shared_ptr<TriangleOctree> triangle_octree;
+
+		bool analytic_normals = false;
+		float zero_offset = 0;
+		float distance_scale = 0.95f;
+
+		double iou = 0.0;
+		float iou_decay = 0.0f;
+		bool calculate_iou_online = false;
+		GPUMemory<uint32_t> iou_counter;
+
+		struct Training {
+			size_t idx = 0;
+			size_t size = 0;
+			size_t max_size = 1 << 24;
+			bool did_generate_more_training_data = false;
+			bool generate_sdf_data_online = true;
+			float surface_offset_scale = 1.0f;
+			GPUMemory<TrainingInput> inputs;
+			GPUMemory<TrainingInput> inputs_shuffled;
+			GPUMemory<float> distances;
+			GPUMemory<float> distances_shuffled;
+			GPUMemory<vec3> perturbations;
+		} training = {};
+	} m_sphere_sdf;
+
 	void generate_training_samples_spline(Spline::TrainingInput* inputs, float* distances, uint32_t n_to_generate, cudaStream_t stream, bool uniform_only);
+	void generate_training_samples_sphere(Sphere::TrainingInput* inputs, float* distances, uint32_t n_to_generate, cudaStream_t stream, bool uniform_only);
+	void upload_segment_extra_dims(cudaStream_t stream);
+	void upload_segment_extra_dims_sphere(cudaStream_t stream);
 
 	enum EDataType {
 		Float,

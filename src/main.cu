@@ -149,8 +149,9 @@ int main_func(const std::vector<std::string>& arguments) {
 	}
 
 	Testbed testbed;
-
+	tlog::info() << 1;
 	for (auto file : get(files)) {
+		tlog::info() << file;
 		testbed.load_file(file);
 	}
 
@@ -163,7 +164,7 @@ int main_func(const std::vector<std::string>& arguments) {
 	} else if (network_config_flag) {
 		testbed.reload_network_from_file(get(network_config_flag));
 	}
-
+	
 	testbed.m_train = !no_train_flag;
 
 #ifdef NGP_GUI

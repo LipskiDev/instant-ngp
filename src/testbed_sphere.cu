@@ -41,13 +41,15 @@ CMRC_DECLARE(ngp);
 #	undef copysign
 #endif
 
+#define M_PI 3.14159265359
+
 namespace ngp {
 
 static constexpr uint32_t MARCH_ITER = 10000;
 
-Testbed::NetworkDims Testbed::network_dims_spline_sdf() const {
+Testbed::NetworkDims Testbed::network_dims_sphere_sdf() const {
 	NetworkDims dims;
-	dims.n_input = 17;
+	dims.n_input = 7;
 	dims.n_output = 1;
 	dims.n_pos = 3;
 	return dims;
@@ -86,7 +88,7 @@ __device__ inline float SmithG_GGX(float NdotV, float alphaG) {
 // this function largely based on:
 // https://github.com/wdas/brdf/blob/master/src/brdfs/disney.brdf
 // http://blog.selfshadow.com/publications/s2012-shading-course/burley/s2012_pbs_disney_brdf_notes_v3.pdf
-__device__ vec3 spline_evaluate_shading(
+__device__ vec3 sphere_evaluate_shading(
 	const vec3& base_color,
 	const vec3& ambient_color, // :)
 	const vec3& light_color,   // :)
@@ -156,7 +158,7 @@ __device__ vec3 spline_evaluate_shading(
 	return vec3(brdf * light_color) * NdotL + amb;
 }
 
-__global__ void spline_advance_pos_kernel_sdf(
+__global__ void sphere_advance_pos_kernel_sdf(
 	const uint32_t n_elements,
 	const float zero_offset,
 	vec3* __restrict__ positions,
@@ -232,7 +234,7 @@ __global__ void spline_advance_pos_kernel_sdf(
 	++payload.n_steps;
 }
 
-__global__ void spline_perturb_sdf_samples(
+__global__ void sphere_perturb_sdf_samples(
 	uint32_t n_elements, const vec3* __restrict__ perturbations, vec3* __restrict__ positions, float* __restrict__ distances
 ) {
 	uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -247,7 +249,7 @@ __global__ void spline_perturb_sdf_samples(
 	distances[i] = length(perturbation) * 1.001f;
 }
 
-__global__ void spline_prepare_shadow_rays(
+__global__ void sphere_prepare_shadow_rays(
 	const uint32_t n_elements,
 	vec3 sun_dir,
 	vec3* __restrict__ positions,
@@ -308,7 +310,7 @@ __global__ void spline_prepare_shadow_rays(
 	}
 }
 
-__global__ void spline_write_shadow_ray_result(
+__global__ void sphere_write_shadow_ray_result(
 	const uint32_t n_elements,
 	BoundingBox aabb,
 	const vec3* __restrict__ positions,
@@ -324,7 +326,7 @@ __global__ void spline_write_shadow_ray_result(
 	shadow_factors[shadow_payloads[i].idx] = aabb.contains(positions[i]) ? 0.0f : min_visibility[i];
 }
 
-__global__ void spline_shade_kernel_sdf(
+__global__ void sphere_shade_kernel_sdf(
 	const uint32_t n_elements,
 	BoundingBox aabb,
 	float floor_y,
@@ -374,7 +376,7 @@ __global__ void spline_shade_kernel_sdf(
 			float check = ((int(floorf(check_size * (pos.x - aabb.min.x))) ^ int(floorf(check_size * (pos.z - aabb.min.z)))) & 1) ? 0.8f :
 																																	0.2f;
 			const vec3 floorcol = vec3{check * check * check, check * check, check};
-			color = spline_evaluate_shading(
+			color = sphere_evaluate_shading(
 				floor ? floorcol : brdf.basecolor * brdf.basecolor,
 				brdf.ambientcolor * skycol,
 				suncol,
@@ -405,7 +407,7 @@ __global__ void spline_shade_kernel_sdf(
 	depth_buffer[payload.idx] = dot(cam_fwd, pos - cam_pos);
 }
 
-__global__ void spline_compact_kernel_shadow_sdf(
+__global__ void sphere_compact_kernel_shadow_sdf(
 	const uint32_t n_elements,
 	const float zero_offset,
 	vec3* src_positions,
@@ -456,7 +458,7 @@ __global__ void spline_compact_kernel_shadow_sdf(
 	}
 }
 
-__global__ void spline_compact_kernel_sdf(
+__global__ void sphere_compact_kernel_sdf(
 	const uint32_t n_elements,
 	const float zero_offset,
 	vec3* src_positions,
@@ -492,7 +494,7 @@ __global__ void spline_compact_kernel_sdf(
 	}
 }
 
-__global__ void spline_uniform_octree_sample_kernel(
+__global__ void sphere_uniform_octree_sample_kernel(
 	const uint32_t num_elements,
 	default_rng_t rng,
 	const TriangleOctreeNode* __restrict__ octree_nodes,
@@ -531,7 +533,7 @@ __global__ void spline_uniform_octree_sample_kernel(
 	samples[i] = size * (vec3(pos) + samples[i]);
 }
 
-__global__ void spline_scale_to_aabb_kernel(uint32_t n_elements, BoundingBox aabb, vec3* __restrict__ inout) {
+__global__ void sphere_scale_to_aabb_kernel(uint32_t n_elements, BoundingBox aabb, vec3* __restrict__ inout) {
 	uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i >= n_elements) {
 		return;
@@ -540,7 +542,7 @@ __global__ void spline_scale_to_aabb_kernel(uint32_t n_elements, BoundingBox aab
 	inout[i] = aabb.min + inout[i] * aabb.diag();
 }
 
-__global__ void spline_compare_signs_kernel(
+__global__ void sphere_compare_signs_kernel(
 	uint32_t n_elements,
 	const vec3* positions,
 	const float* distances_ref,
@@ -571,7 +573,7 @@ __global__ void spline_compare_signs_kernel(
 	}
 }
 
-__global__ void spline_scale_iou_counters_kernel(uint32_t n_elements, uint32_t* counters, float scale) {
+__global__ void sphere_scale_iou_counters_kernel(uint32_t n_elements, uint32_t* counters, float scale) {
 	uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i >= n_elements) {
 		return;
@@ -580,7 +582,7 @@ __global__ void spline_scale_iou_counters_kernel(uint32_t n_elements, uint32_t* 
 	counters[i] = uint32_t(roundf(counters[i] * scale));
 }
 
-__global__ void spline_assign_float(uint32_t n_elements, float value, float* __restrict__ out) {
+__global__ void sphere_assign_float(uint32_t n_elements, float value, float* __restrict__ out) {
 	uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
 	if (i >= n_elements) {
 		return;
@@ -589,7 +591,7 @@ __global__ void spline_assign_float(uint32_t n_elements, float value, float* __r
 	out[i] = value;
 }
 
-__global__ void spline_init_rays_with_payload_kernel_sdf(
+__global__ void sphere_init_rays_with_payload_kernel_sdf(
 	uint32_t sample_index,
 	vec3* __restrict__ positions,
 	float* __restrict__ distances,
@@ -698,11 +700,11 @@ __global__ void spline_init_rays_with_payload_kernel_sdf(
 	payload.alive = aabb.contains(ray.o);
 }
 
-__host__ __device__ uint32_t spline_sample_discrete(float uniform_sample, const float* __restrict__ cdf, int length) {
+__host__ __device__ uint32_t sphere_sample_discrete(float uniform_sample, const float* __restrict__ cdf, int length) {
 	return binary_search(uniform_sample, cdf, length);
 }
 
-__global__ void spline_sample_uniform_on_triangle_kernel(
+__global__ void sphere_sample_uniform_on_triangle_kernel(
 	uint32_t n_elements, const float* __restrict__ cdf, uint32_t length, const Triangle* __restrict__ triangles, vec3* __restrict__ sampled_positions
 ) {
 	uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -711,89 +713,27 @@ __global__ void spline_sample_uniform_on_triangle_kernel(
 	}
 
 	vec3 sample = sampled_positions[i];
-	uint32_t tri_idx = spline_sample_discrete(sample.x, cdf, length);
+	uint32_t tri_idx = sphere_sample_discrete(sample.x, cdf, length);
 
 	sampled_positions[i] = triangles[tri_idx].sample_uniform_position(sample.yz());
 }
 
-
-
-void flatten_spline_segments(
-	const std::vector<Testbed::Spline::Segment>& src,
-	std::vector<int>& flat,
-	std::vector<int>& offsets,
-	std::vector<int>& counts) 
-{
-	const size_t N = src.size();
-	offsets.resize(N);
-	counts.resize(N);
-
-	size_t total = 0;
-	for(const auto& v : src) {
-		total += v.indices.size();
-	}
-
-	flat.clear();
-	flat.reserve(total);
-
-	size_t offset = 0;
-	for(size_t i = 0; i < N; i++) {
-		offsets[i] = offset;
-		counts[i] = src[i].indices.size();
-
-		flat.insert(flat.end(), src[i].indices.begin(), src[i].indices.end());
-		offset += src[i].indices.size();
-	}
-}
-
-void Testbed::load_spline(const fs::path& data_path) {
-	tlog::info() << "Trying to load spline at: " << data_path;
+void Testbed::load_sphere(const fs::path& data_path) {
+	tlog::info() << "Trying to load sphere at: " << data_path;
 	std::ifstream file(data_path.str());
 	if (!file.is_open()) {
-		tlog::error() << "Could not open spline .bezdat file: " << data_path;
+		tlog::error() << "Could not open sphere .bezdat file: " << data_path;
 		return;
 	}
 
 	std::string line;
 
 	if (!std::getline(file, line)) {
-		tlog::error() << "Spline .bezdat file is empty.";
+		tlog::error() << "Sphere .bezdat file is empty.";
 		return;
 	}
 
-
-
 	std::stringstream ss(line);
-
-	while(std::getline(file, line)) {
-		if(line.empty()) continue;
-
-		std::istringstream iss(line);
-		std::string tag;
-		iss >> tag;
-
-		if(tag == "PT")
-		{
-			Spline::Point p;
-			iss >> p.pos.x >> p.pos.y >> p.pos.z
-				>> p.radius
-				>> p.color.r >> p.color.g >> p.color.b;
-			m_spline_sdf.points.push_back(p);
-		} else if(tag == "BC") {
-			Spline::Segment seg;
-			int idx;
-
-			while(iss >> idx) {
-				seg.indices.push_back(idx);
-			}
-
-			if(!seg.indices.empty()) {
-				m_spline_sdf.segments.push_back(std::move(seg));
-			}
-		}
-	}
-
-
 
 	m_raw_aabb.min = vec3(std::numeric_limits<float>::infinity());
 	m_raw_aabb.max = vec3(-std::numeric_limits<float>::infinity());
@@ -806,16 +746,6 @@ void Testbed::load_spline(const fs::path& data_path) {
 	m_raw_aabb.inflate(length(m_raw_aabb.diag()) * inflation);
 	float scale = max(m_raw_aabb.diag());
 
-	// Normalize spline coords to lie within [0,1]^3
-	for (int i = 0; i < (int)m_spline_sdf.points.size(); ++i) {
-		Spline::Point p = m_spline_sdf.points[i];
-
-		p.pos = (p.pos - m_raw_aabb.min - 0.5f * m_raw_aabb.diag()) / scale + vec3(0.5f);
-		p.radius /= scale;                    
-
-		m_spline_sdf.points[i] = p;
-	}
-
 	m_aabb = {};
 	m_aabb.enlarge(vec3(0.0, 0.0, 0.0));
 	m_aabb.enlarge(vec3(1.0, 1.0, 1.0));
@@ -825,365 +755,222 @@ void Testbed::load_spline(const fs::path& data_path) {
 	m_render_aabb = m_aabb;
 	m_render_aabb.inflate(length(m_render_aabb.diag()) * inflation);
 	m_render_aabb_to_local = mat3(1.0f);
-	
-
-	// make data ready for gpu training
-	flatten_spline_segments(m_spline_sdf.segments, m_spline_sdf.index_flat_host, m_spline_sdf.index_offsets_host, m_spline_sdf.index_counts_host);
-
-	m_spline_sdf.index_flat.resize(m_spline_sdf.index_flat_host.size());
-	m_spline_sdf.index_flat.copy_from_host(m_spline_sdf.index_flat_host.data(), m_spline_sdf.index_flat_host.size());
-
-	m_spline_sdf.index_offsets.resize(m_spline_sdf.index_offsets_host.size());
-	m_spline_sdf.index_offsets.copy_from_host(m_spline_sdf.index_offsets_host.data(), m_spline_sdf.index_offsets_host.size());
-
-	m_spline_sdf.index_counts.resize(m_spline_sdf.index_counts_host.size());
-	m_spline_sdf.index_counts.copy_from_host(m_spline_sdf.index_counts_host.data(), m_spline_sdf.index_counts_host.size());
-
-	m_spline_sdf.points_gpu.resize(m_spline_sdf.points.size());
-	m_spline_sdf.points_gpu.copy_from_host(
-		m_spline_sdf.points.data(),
-		m_spline_sdf.points.size()
-	);
 }
 
 __host__ __device__
-inline vec3 hermite_pos_eval(
-	const hermite_node<vec3> h0,
-	const hermite_node<vec3> h1,
-	float t
+vec3 point_on_sphere(const vec3& center, float radius, float z, float phi) {
+    float r_xy = sqrtf(fmaxf(0.0f, 1.0f - z*z));
+    vec3 dir = { r_xy * cosf(phi), r_xy * sinf(phi), z };
+    return center + radius * dir;
+}
+
+inline __device__ vec3 random_point_in_cube(
+    default_rng_t& rng,
+    float min_val,
+    float max_val
 ) {
-	float t2 = t * t;
-	float t3 = t2 * t;
+    const float extent = max_val - min_val;
 
-	float h00 = 2.0f * t3 - 3.0f * t2 + 1.0f;
-	float h10 = t3 - 2.0f * t2 + t;
-	float h01 = -2.0f * t3 + 3.0f * t2;
-	float h11 = t3 - t2;
-
-	return 	h00 * h0.p +
-			h10 * h0.t + 
-			h01 * h1.p + 
-			h11 * h1.t;
+    return {
+        min_val + random_val(rng) * extent,
+        min_val + random_val(rng) * extent,
+        min_val + random_val(rng) * extent
+    };
 }
 
-__host__ __device__
-inline vec3 hermite_tangent_eval(
-	const hermite_node<vec3> h0,
-	const hermite_node<vec3> h1,
-	float t
-) {
-	float t2 = t * t;
-
-	float dh00 = 6.0f * t2 - 6.0f * t;
-	float dh10 = 3.0f * t2 - 4.0f * t + 1.0f;
-	float dh01 = -6.0f * t2 + 6.0f * t;
-	float dh11 = 3.0f * t2 - 2.0f * t;
-
-	return 	h0.p * dh00 +
-			h0.t * dh10 +
-			h1.p * dh01 +
-			h1.t * dh11;
+__device__ inline float sample_radius_volume_uniform(default_rng_t& rng, float rmin, float rmax) {
+    float t = random_val(rng);
+    float rmin3 = rmin*rmin*rmin;
+    float rmax3 = rmax*rmax*rmax;
+    return cbrtf(rmin3 + t * (rmax3 - rmin3));
 }
 
-template<typename T> 
-__host__ __device__
-inline std::pair<hermite_node<T>, hermite_node<T>> cubic_bezier_to_hermite(
-	const T& p0, const T& p1, const T& p2, const T& p3
-) {
-	hermite_node<T> h0 {p0, (p1 - p0) * 3.0f };
-	hermite_node<T> h1 {p3, (p3 - p2) * 3.0f };
-	return {h0, h1};
+__device__ inline vec3 random_unit_vector(default_rng_t& rng) {
+    // uniform on sphere
+    const float u = random_val(rng);          // [0,1)
+    const float v = random_val(rng);          // [0,1)
+    const float z = 2.0f * u - 1.0f;          // [-1,1]
+    const float a = 2.0f * (float)M_PI * v;   // [0,2pi)
+    const float r = sqrtf(fmaxf(0.0f, 1.0f - z*z));
+    return { r * cosf(a), r * sinf(a), z };
 }
 
-__host__ __device__
-inline void make_orthonormal_basis(const vec3& n, vec3& u, vec3& v) {
-	float len2 = dot(n, n);
-    if (len2 < 1e-20f) {
-        u = vec3(1.0f, 0.0f, 0.0f);
-        v = vec3(0.0f, 1.0f, 0.0f);
-        return;
+__device__ inline float clamp_sd(float sd) {
+    const float dmax = 0.25f; 
+    return copysignf(fminf(fabsf(sd), dmax), sd);
+}
+
+__device__ inline vec3 nearest_point_on_sphere(const vec3& p, const vec3& c, float R) {
+    vec3 d = p - c;
+    float len2 = d.x*d.x + d.y*d.y + d.z*d.z;
+
+    if (len2 <= 1e-20f) {
+        return { c.x + R, c.y, c.z };
     }
 
-    vec3 t = n * rsqrtf(len2);
-
-    vec3 helper = (fabsf(t.z) < 0.999f) ? vec3(0.0f, 0.0f, 1.0f)
-                                        : vec3(0.0f, 1.0f, 0.0f);
-
-    u = normalize(cross(helper, t));
-    v = cross(t, u); 
+    float inv_len = rsqrtf(len2);
+    return c + d * (R * inv_len);
 }
 
-__host__ __device__ 
-vec3 point_on_disk(const vec3& pos, const vec3& tan, float radius, float theta) {
-	vec3 u, v;
-	make_orthonormal_basis(tan, u, v);
-
-	float c = cosf(theta);
-	float s = sinf(theta);
-
-	return pos + radius * (c * u + s * v);
-}
-
-__global__ void generate_spline_surface_distances(
+__global__ void generate_sphere_surface_distances(
     uint32_t n_elements,
-    ngp::Testbed::Spline::TrainingInput* __restrict__ inputs,
+    ngp::Testbed::Sphere::TrainingInput* __restrict__ inputs,
     float* __restrict__ distances,
-    Testbed::Spline::Point* points,
-    int*   indices_flat,
-    int*   indices_offsets,
-    int*   indices_counts,
-    int    n_segments,
     uint32_t seed,
-	float radius_min,
-	float radius_max
+	uint32_t rng_offset,
+    float aabb_min,
+    float aabb_max
 ) {
-    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    const uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n_elements) return;
 
     default_rng_t rng{seed};
-    rng.advance(i * 5);        
+    rng.advance((i) * 7);
+
+    const float min_R = 0.01f;
+    const float max_R = 0.25f;
+
+    float x = random_val(rng);
+    float y = random_val(rng);
+    float z = random_val(rng);
+    const vec3 center = {x, y, z};
+
+    float R = min_R + random_val(rng) * (max_R - min_R);
 	
-	float a = random_val(rng);
-	a = ((int) roundf((a * 100))) / (float) 100.0;
+    const vec3 random_sample = random_point_in_cube(rng, aabb_min, aabb_max);
+	const vec3 sample = nearest_point_on_sphere(random_sample, center, R);
 
-	const vec3 P0 = vec3(0.5, 0.5, 0.0);
-	const vec3 P1 = vec3(0.5, 0.5, 1.0);
-	const vec3 M0 = vec3(0.0, a, 1.0);
-	const vec3 M1 = vec3(0.0, 0.0, 1.0);
+    float sd = length(sample - center) - R;
 
-    hermite_node<vec3> first;
-	first.p = P0;
-	first.t = M0;
-	hermite_node<vec3> second;
-	second.p = P1;
-	second.t = M1;
+    auto& out = inputs[i];
+    out.x = sample.x; out.y = sample.y; out.z = sample.z;
+    out.r = R;
+    out.pos_x = center.x; out.pos_y = center.y; out.pos_z = center.z;
 
-    float t = random_val(rng);           
+    distances[i] = sd;	
 
-    vec3 pos_on_curve     = hermite_pos_eval(first, second, t);
-	// printf("Pos on Curve: (%f %f %f)\n", pos_on_curve.x, pos_on_curve.y, pos_on_curve.z);
-    vec3 tangent_on_curve = hermite_tangent_eval(first, second, t);
-	float tube_R = 0.25;
-
-	float r_min = tube_R * radius_min;
-	float r_max = tube_R * radius_max;
-
-    float radius_sample  = r_min + random_val(rng) * (r_max - r_min);
-    float theta          = random_val(rng) * 2.0f * PI();
-
-    vec3 disk_point = point_on_disk(pos_on_curve, tangent_on_curve, radius_sample, theta);
-	
-	vec3 local = disk_point;
-
-	float sd = length(disk_point - pos_on_curve);
-
-
-	// Output target
-	ngp::Testbed::Spline::TrainingInput& out = inputs[i];
-
-	out.x = local.x; out.y = local.y; out.z = local.z;
-
-	out.A_px = P0.x; out.A_py = P0.y; out.A_pz = P0.z;
-	out.A_mx = M0.x; out.A_my = M0.y; out.A_mz = M0.z;
-	out.A_r = tube_R;
-
-	out.B_px = P1.x; out.B_py = P1.y; out.B_pz = P1.z;
-	out.B_mx = M1.x; out.B_my = M1.y; out.B_mz = M1.z;
-	out.B_r = tube_R;
-
-    distances[i] = sd;
-}
-
-
-__global__ void generate_spline_endings_distances(
-    uint32_t n_elements,
-    ngp::Testbed::Spline::TrainingInput* __restrict__ inputs,
-    float* __restrict__ distances,
-    Testbed::Spline::Point* points,
-    int*   indices_flat,
-    int*   indices_offsets,
-    int*   indices_counts,
-    int    n_segments,
-    uint32_t seed,
-	float radius_min,
-	float radius_max
-) {
-    uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n_elements) return;
-
-    default_rng_t rng{seed};
-    rng.advance(i * 4);             
-
-	const vec3 P0 = vec3(0.5, 0.5, 0.0);
-	const vec3 P1 = vec3(0.5, 0.5, 1.0);
-	const vec3 M0 = vec3(0.0, random_val(rng), 1.0);
-	const vec3 M1 = vec3(0.0, 0.0, 1.0);
-
-    hermite_node<vec3> first;
-	first.p = P0;
-	first.t = M0;
-	hermite_node<vec3> second;
-	second.p = P1;
-	second.t = M1;
-
-    float t = random_val(rng);   
-	if(t < 0.5) {
-		t = 0.0;
-	} else {
-		t = 1.0;
-	}
-
-
-    // vec3 pos_on_curve     = hermite_pos_eval(first, second, t);
-	vec3 pos_on_curve = vec3(0.5, 0.5, t);
-	vec3 tangent_on_curve = vec3(0.0, 0.0, 1.0);
-	float tube_R = 1.0;
-    // vec3 tangent_on_curve = hermite_tangent_eval(first, second, t);
-
-	float r_min = tube_R * radius_min;
-	float r_max = tube_R * radius_max;
-
-    float radius_sample  = r_min + random_val(rng) * (r_max - r_min);
-    float theta          = random_val(rng) * 2.0f * PI();
-
-    vec3 disk_point = point_on_disk(pos_on_curve, tangent_on_curve, radius_sample, theta);
-	
-	vec3 local = disk_point;
-
-	float sd;
-
-	if(radius_sample <= tube_R) {
-		sd = 0.0;
-	} else {
-		sd = radius_sample - tube_R;
-	}
-	
-
-	// Output target
-	ngp::Testbed::Spline::TrainingInput& out = inputs[i];
-
-	out.x = local.x; out.y = local.y; out.z = local.z;
-
-	out.A_px = 0.5; out.A_py = 0.5; out.A_pz = 0.0;
-	out.A_mx = 0.0; out.A_my = 0.0; out.A_mz = 1.0;
-	out.A_r = tube_R;
-
-	out.B_px = 0.5; out.B_py = 0.5; out.B_pz = 1.0;
-	out.B_mx = 0.0; out.B_my = 0.0; out.B_mz = 1.0;
-	out.B_r = tube_R;
-
-    distances[i] = sd;
-}
-
-void Testbed::generate_training_samples_spline(Spline::TrainingInput* inputs, float* distances, uint32_t n_to_generate, cudaStream_t stream, bool uniform_only) {
-	uint32_t n_to_generate_base = n_to_generate / 16;
-	const uint32_t n_to_generate_surface_exact = uniform_only ? 0 : n_to_generate_base * 8;
-	const uint32_t n_to_generate_distance_outside = uniform_only ? 0 : n_to_generate_base * 5;
-	const uint32_t n_to_generate_distance_inside = uniform_only ? 0 : n_to_generate_base * 3;
-
-	linear_kernel(
-		generate_spline_surface_distances,
-		0,
-		stream,
-		n_to_generate_surface_exact,
-		m_spline_sdf.training.inputs.data(),
-		m_spline_sdf.training.distances.data(),
-		m_spline_sdf.points_gpu.data(),
-		m_spline_sdf.index_flat.data(),
-		m_spline_sdf.index_offsets.data(),
-		m_spline_sdf.index_counts.data(),
-		(int)m_spline_sdf.segments.size(),
-		m_training_step + 1,      // seed
-		0.99,
-		1.01
-	);
-
-	linear_kernel(
-		generate_spline_surface_distances,
-		0,
-		stream,
-		n_to_generate_distance_outside,
-		m_spline_sdf.training.inputs.data() + n_to_generate_surface_exact,
-		m_spline_sdf.training.distances.data() + n_to_generate_surface_exact,
-		m_spline_sdf.points_gpu.data(),
-		m_spline_sdf.index_flat.data(),
-		m_spline_sdf.index_offsets.data(),
-		m_spline_sdf.index_counts.data(),
-		(int)m_spline_sdf.segments.size(),
-		m_training_step + 1,      // seed
-		1.01,
-		3
-	);
-
-	linear_kernel(
-		generate_spline_surface_distances,
-		0,
-		stream,
-		n_to_generate_distance_inside,
-		m_spline_sdf.training.inputs.data() + n_to_generate_surface_exact + n_to_generate_distance_outside,
-		m_spline_sdf.training.distances.data() + n_to_generate_surface_exact + n_to_generate_distance_outside,
-		m_spline_sdf.points_gpu.data(),
-		m_spline_sdf.index_flat.data(),
-		m_spline_sdf.index_offsets.data(),
-		m_spline_sdf.index_counts.data(),
-		(int)m_spline_sdf.segments.size(),
-		m_training_step + 1,      // seed
-		0,
-		0.99
-	);
-
-	// linear_kernel(
-	// 	generate_spline_endings_distances,
-	// 	0,
-	// 	stream,
-	// 	n_to_generate_distance_inside,
-	// 	m_spline_sdf.training.inputs.data() + n_to_generate_surface_exact + n_to_generate_distance_outside + n_to_generate_distance_inside,
-	// 	m_spline_sdf.training.distances.data()+ n_to_generate_surface_exact + n_to_generate_distance_outside + n_to_generate_distance_inside,
-	// 	m_spline_sdf.points_gpu.data(),
-	// 	m_spline_sdf.index_flat.data(),
-	// 	m_spline_sdf.index_offsets.data(),
-	// 	m_spline_sdf.index_counts.data(),
-	// 	(int)m_spline_sdf.segments.size(),
-	// 	m_training_step + 1,      // seed
-	// 	0,
-	// 	0.95
+	// printf("Center: (%f, %f, %f), Radius: %f, Sample: (%f, %f, %f) SD: %f\n",
+	// 	center.x, center.y, center.z, R,
+	// 	sample.x, sample.y, sample.z, sd
 	// );
+}
+
+__global__ void generate_sphere_uniform_samples(
+    uint32_t n_elements,
+    ngp::Testbed::Sphere::TrainingInput* __restrict__ inputs,
+    float* __restrict__ distances,
+    uint32_t seed,
+	uint32_t rng_offset,
+    float aabb_min,
+    float aabb_max
+) {
+ 	const uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n_elements) return;
+
+    default_rng_t rng{seed};
+    rng.advance((i) * 7);
+
+    const float min_R = 0.01f;
+    const float max_R = 0.25f;
+
+	float x = random_val(rng);
+	x = ((int) roundf((x * 1000))) / 1000.0f;
+    float y = random_val(rng);
+	y = ((int) roundf((y * 1000))) / 1000.0f;
+    float z = random_val(rng);
+	z = ((int) roundf((z * 1000))) / 1000.0f;
+    const vec3 center = {x, 0.5, 0.5};
+
+    float R = min_R + random_val(rng) * (max_R - min_R);
+	
+    const vec3 sample = random_point_in_cube(rng, aabb_min, aabb_max);
+
+    float sd = length(sample - center) - R;
+
+    auto& out = inputs[i];
+    out.x = sample.x; out.y = sample.y; out.z = sample.z;
+    out.r = R;
+    out.pos_x = center.x; out.pos_y = center.y; out.pos_z = center.z;
+
+    distances[i] = sd;
+
+	// printf("Center: (%f, %f, %f), Radius: %f, Sample: (%f, %f, %f) SD: %f\n",
+	// 	center.x, center.y, center.z, R,
+	// 	sample.x, sample.y, sample.z, sd
+	// );
+
+}
+
+void Testbed::generate_training_samples_sphere(Sphere::TrainingInput* inputs, float* distances, uint32_t n_to_generate, cudaStream_t stream, bool uniform_only) {
+	uint32_t n_to_generate_base = n_to_generate / 16;
+	const uint32_t n_to_generate_uniform = uniform_only ? n_to_generate : n_to_generate_base * 8;
+	const uint32_t n_to_generate_uniform_surface = uniform_only ? n_to_generate : n_to_generate_base * 8;
+
+	uint32_t off_uniform = 0;
+	uint32_t off_surface = n_to_generate_uniform;
+
+	linear_kernel(
+		generate_sphere_uniform_samples,
+		0,
+		stream,
+		n_to_generate_uniform,
+		inputs,
+		distances,
+		m_training_step + 1,
+		off_uniform,
+		-0.00,
+		1.00
+	);
+
+
+	linear_kernel(
+		generate_sphere_surface_distances,
+		0,
+		stream,
+		n_to_generate_uniform_surface,
+		inputs + n_to_generate_uniform,
+		distances + n_to_generate_uniform,
+		m_training_step + 1,      // seed
+		off_surface,
+		-0.00,
+		1.00
+	);
 
 	CUDA_CHECK_THROW(cudaStreamSynchronize(stream));
 }
 
-void Testbed::train_spline(size_t target_batch_size, bool get_loss_scalar, cudaStream_t stream) {
+void Testbed::train_sphere(size_t target_batch_size, bool get_loss_scalar, cudaStream_t stream) {
 	const uint32_t n_output_dims = 1;
-	const uint32_t n_input_dims = 17;
+	const uint32_t n_input_dims = 7;
 
-	if (m_spline_sdf.training.size >= target_batch_size) {
+	if (m_sphere_sdf.training.size >= target_batch_size) {
 		// Auxiliary matrices for training
-		const uint32_t batch_size = (uint32_t)std::min(m_spline_sdf.training.size, target_batch_size);
+		const uint32_t batch_size = (uint32_t)std::min(m_sphere_sdf.training.size, target_batch_size);
 
 		// Permute all training records to de-correlate training data
 		linear_kernel(
-			shuffle<Spline::TrainingInput>,
+			shuffle<Sphere::TrainingInput>,
 			0,
 			stream,
-			m_spline_sdf.training.size,
+			m_sphere_sdf.training.size,
 			1,
 			m_training_step,
-			m_spline_sdf.training.inputs.data(),
-			m_spline_sdf.training.inputs_shuffled.data()
+			m_sphere_sdf.training.inputs.data(),
+			m_sphere_sdf.training.inputs_shuffled.data()
 		);
 		linear_kernel(
 			shuffle<float>,
 			0,
 			stream,
-			m_spline_sdf.training.size,
+			m_sphere_sdf.training.size,
 			1,
 			m_training_step,
-			m_spline_sdf.training.distances.data(),
-			m_spline_sdf.training.distances_shuffled.data()
+			m_sphere_sdf.training.distances.data(),
+			m_sphere_sdf.training.distances_shuffled.data()
 		);
 
-		GPUMatrix<float> training_target_matrix(m_spline_sdf.training.distances_shuffled.data(), n_output_dims, batch_size);
-		GPUMatrix<float> training_batch_matrix((float*)(m_spline_sdf.training.inputs_shuffled.data()), n_input_dims, batch_size);
+		GPUMatrix<float> training_target_matrix(m_sphere_sdf.training.distances_shuffled.data(), n_output_dims, batch_size);
+		GPUMatrix<float> training_batch_matrix((float*)(m_sphere_sdf.training.inputs_shuffled.data()), n_input_dims, batch_size);
 
 		auto ctx = m_trainer->training_step(stream, training_batch_matrix, training_target_matrix);
 
@@ -1195,22 +982,22 @@ void Testbed::train_spline(size_t target_batch_size, bool get_loss_scalar, cudaS
 	}
 }
 
-void Testbed::training_prep_spline(uint32_t batch_size, cudaStream_t stream) {
-	if (m_spline_sdf.training.generate_sdf_data_online) {
-		m_spline_sdf.training.size = batch_size;
-		m_spline_sdf.training.inputs.enlarge(m_spline_sdf.training.size);
-		m_spline_sdf.training.inputs_shuffled.enlarge(m_spline_sdf.training.size);
-		m_spline_sdf.training.distances.enlarge(m_spline_sdf.training.size);
-		m_spline_sdf.training.distances_shuffled.enlarge(m_spline_sdf.training.size);
+void Testbed::training_prep_sphere(uint32_t batch_size, cudaStream_t stream) {
+	if (m_sphere_sdf.training.generate_sdf_data_online) {
+		m_sphere_sdf.training.size = batch_size;
+		m_sphere_sdf.training.inputs.enlarge(m_sphere_sdf.training.size);
+		m_sphere_sdf.training.inputs_shuffled.enlarge(m_sphere_sdf.training.size);
+		m_sphere_sdf.training.distances.enlarge(m_sphere_sdf.training.size);
+		m_sphere_sdf.training.distances_shuffled.enlarge(m_sphere_sdf.training.size);
 
-		generate_training_samples_spline(
-			m_spline_sdf.training.inputs.data(), m_spline_sdf.training.distances.data(), batch_size, stream, false
+		generate_training_samples_sphere(
+			m_sphere_sdf.training.inputs.data(), m_sphere_sdf.training.distances.data(), batch_size, stream, true
 		);
 	}
 }
 
 
-void Testbed::SphereTracerSpline::init_rays_from_camera(
+void Testbed::SphereTracerSphere::init_rays_from_camera(
 	uint32_t sample_index,
 	const ivec2& resolution,
 	const vec2& focal_length,
@@ -1239,7 +1026,7 @@ void Testbed::SphereTracerSpline::init_rays_from_camera(
 
 	const dim3 threads = {16, 8, 1};
 	const dim3 blocks = {div_round_up((uint32_t)resolution.x, threads.x), div_round_up((uint32_t)resolution.y, threads.y), 1};
-	spline_init_rays_with_payload_kernel_sdf<<<blocks, threads, 0, stream>>>(
+	sphere_init_rays_with_payload_kernel_sdf<<<blocks, threads, 0, stream>>>(
 		sample_index,
 		m_rays[0].pos,
 		m_rays[0].distance,
@@ -1268,14 +1055,14 @@ void Testbed::SphereTracerSpline::init_rays_from_camera(
 	m_resolution = resolution;
 }
 
-void Testbed::SphereTracerSpline::init_rays_from_data(uint32_t n_elements, const RaysSdfSoa& data, cudaStream_t stream) {
+void Testbed::SphereTracerSphere::init_rays_from_data(uint32_t n_elements, const RaysSdfSoa& data, cudaStream_t stream) {
 	enlarge(n_elements, stream);
 	m_rays[0].copy_from_other_async(n_elements, data, stream);
 	m_n_rays_initialized = n_elements;
 	m_resolution = {(int)m_n_rays_initialized, 1};
 }
 
-uint32_t Testbed::SphereTracerSpline::trace_bvh(TriangleBvh* bvh, const Triangle* triangles, cudaStream_t stream) {
+uint32_t Testbed::SphereTracerSphere::trace_bvh(TriangleBvh* bvh, const Triangle* triangles, cudaStream_t stream) {
 	uint32_t n_alive = m_n_rays_initialized;
 	m_n_rays_initialized = 0;
 
@@ -1292,38 +1079,33 @@ uint32_t Testbed::SphereTracerSpline::trace_bvh(TriangleBvh* bvh, const Triangle
 	return n_alive;
 }
 
-void Testbed::upload_segment_extra_dims(
+void Testbed::upload_segment_extra_dims_sphere(
 	cudaStream_t stream
 ) {
-	float h[14];
-    const auto& seg = m_spline_sdf.m_current_render_target;
+	float h[4];
+    const auto& radius = m_sphere_sdf.m_current_render_target_radius;
+    const auto& pos = m_sphere_sdf.m_current_render_target_pos;
 
     int i = 0;
-    h[i++] = seg.a.p.x; h[i++] = seg.a.p.y; h[i++] = seg.a.p.z;
-    h[i++] = seg.a.m.x; h[i++] = seg.a.m.y; h[i++] = seg.a.m.z;
-    h[i++] = seg.a.r;
-    h[i++] = seg.b.p.x; h[i++] = seg.b.p.y; h[i++] = seg.b.p.z;
-    h[i++] = seg.b.m.x; h[i++] = seg.b.m.y; h[i++] = seg.b.m.z;
-    h[i++] = seg.b.r;
+    h[i++] = radius;
+	h[i++] = pos.x;
+	h[i++] = pos.y;
+	h[i++] = pos.z;
 
-    if (m_spline_sdf.extra_dims.size() != 14) {
-        m_spline_sdf.extra_dims.resize(14);
+    if (m_sphere_sdf.extra_dims.size() != 4) {
+        m_sphere_sdf.extra_dims.resize(4);
     }
-
-	// printf("Seg A:\nA.p.x: %f, A.p.y: %f, A.p.z: %f\nA.m.x: %f, A.m.y: %f, A.m.z: %f\nA.r: %f\n,Seg B:\nB.p.x: %f, B.p.y: %f, B.p.z: %f\nB.m.x: %f, B.m.y: %f, B.m.z: %f\nB.r: %f\n,",
-	// 	h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], h[8], h[9], h[10], h[11], h[12], h[13]
-	// );
 	
 	CUDA_CHECK_THROW(cudaMemcpyAsync(
-		m_spline_sdf.extra_dims.data(),
+		m_sphere_sdf.extra_dims.data(),
 		h,
-		14 * sizeof(float),
+		4 * sizeof(float),
 		cudaMemcpyHostToDevice,
 		stream
 	));
 }
 
-uint32_t Testbed::SphereTracerSpline::trace(
+uint32_t Testbed::SphereTracerSphere::trace(
 	const distance_fun_spline_t& distance_function,
 	const Network<float, network_precision_t>* network,
 	float zero_offset,
@@ -1367,8 +1149,8 @@ uint32_t Testbed::SphereTracerSpline::trace(
 				threads = {N_THREADS_LINEAR, 1, 1};
 				blocks = {n_blocks_linear(n_alive, threads.x), 1, 1};
 			}
-			m_owner->upload_segment_extra_dims(stream);
-			float* extra_dim_ptr = m_owner->m_spline_sdf.extra_dims.data();
+			m_owner->upload_segment_extra_dims_sphere(stream);
+			float* extra_dim_ptr = m_owner->m_sphere_sdf.extra_dims.data();
 			
 			m_fused_trace_kernel->launch(
 				blocks,
@@ -1400,7 +1182,7 @@ uint32_t Testbed::SphereTracerSpline::trace(
 			CUDA_CHECK_THROW(cudaMemsetAsync(m_alive_counter, 0, sizeof(uint32_t), stream));
 			if (m_trace_shadow_rays) {
 				linear_kernel(
-					spline_compact_kernel_shadow_sdf,
+					sphere_compact_kernel_shadow_sdf,
 					0,
 					stream,
 					n_alive,
@@ -1429,7 +1211,7 @@ uint32_t Testbed::SphereTracerSpline::trace(
 				);
 			} else {
 				linear_kernel(
-					spline_compact_kernel_sdf,
+					sphere_compact_kernel_sdf,
 					0,
 					stream,
 					n_alive,
@@ -1459,7 +1241,7 @@ uint32_t Testbed::SphereTracerSpline::trace(
 		for (uint32_t j = 0; j < step_size; ++j) {
 			distance_function(n_alive, rays_current.pos, rays_current.distance, stream);
 			linear_kernel(
-				spline_advance_pos_kernel_sdf,
+				sphere_advance_pos_kernel_sdf,
 				0,
 				stream,
 				n_alive,
@@ -1489,7 +1271,7 @@ uint32_t Testbed::SphereTracerSpline::trace(
 	return n_hit;
 }
 
-void Testbed::SphereTracerSpline::enlarge(size_t n_elements, cudaStream_t stream) {
+void Testbed::SphereTracerSphere::enlarge(size_t n_elements, cudaStream_t stream) {
 	n_elements = next_multiple(n_elements, size_t(BATCH_SIZE_GRANULARITY));
 	auto scratch = allocate_workspace_and_distribute<
 		vec3,
@@ -1577,7 +1359,7 @@ void Testbed::SphereTracerSpline::enlarge(size_t n_elements, cudaStream_t stream
 
 
 
-void Testbed::render_spline(
+void Testbed::render_sphere(
 	cudaStream_t stream,
 	CudaDevice& device,
 	const distance_fun_spline_t& distance_function,
@@ -1596,23 +1378,23 @@ void Testbed::render_spline(
 	if (m_render_mode == ERenderMode::Slice) {
 		plane_z = -plane_z;
 	}
-	auto* octree_ptr = m_spline_sdf.uses_takikawa_encoding || m_spline_sdf.use_triangle_octree ? m_spline_sdf.triangle_octree.get() : nullptr;
+	auto* octree_ptr = m_sphere_sdf.uses_takikawa_encoding || m_sphere_sdf.use_triangle_octree ? m_sphere_sdf.triangle_octree.get() : nullptr;
 
-	SphereTracerSpline tracer{this};
+	SphereTracerSphere tracer{this};
 
 	uint32_t n_octree_levels = octree_ptr ? octree_ptr->depth() : 0;
 
 	BoundingBox sdf_bounding_box = m_aabb;
-	sdf_bounding_box.inflate(m_spline_sdf.zero_offset);
+	sdf_bounding_box.inflate(m_sphere_sdf.zero_offset);
 
 	if (m_jit_fusion) {
 		if (!device.fused_render_kernel()) {
 			try {
 				device.set_fused_render_kernel(
 					std::make_unique<CudaRtcKernel>(
-						"trace_spline",
+						"trace_sphere",
 						fmt::format(
-							"{}\n#include <neural-graphics-primitives/fused_kernels/trace_spline.cuh>\n",
+							"{}\n#include <neural-graphics-primitives/fused_kernels/trace_sphere.cuh>\n",
 							m_network->generate_device_function("eval_sdf")
 						),
 						all_files(cmrc::ngp::get_filesystem())
@@ -1654,15 +1436,15 @@ void Testbed::render_spline(
 		stream
 	);
 
-	bool gt_raytrace = m_render_ground_truth && m_spline_sdf.groundtruth_mode == ESDFGroundTruthMode::RaytracedMesh;
+	bool gt_raytrace = m_render_ground_truth && m_sphere_sdf.groundtruth_mode == ESDFGroundTruthMode::RaytracedMesh;
 
-	auto trace = [&](SphereTracerSpline& tracer) {
+	auto trace = [&](SphereTracerSphere& tracer) {
 		return tracer.trace(
 			distance_function,
 			m_network.get(),
-			m_spline_sdf.zero_offset,
-			m_spline_sdf.distance_scale,
-			m_spline_sdf.maximum_distance,
+			m_sphere_sdf.zero_offset,
+			m_sphere_sdf.distance_scale,
+			m_sphere_sdf.maximum_distance,
 			sdf_bounding_box,
 			get_floor_y(),
 			octree_ptr,
@@ -1695,26 +1477,26 @@ void Testbed::render_spline(
 	}
 	ERenderMode render_mode = (visualized_dimension > -1 || m_render_mode == ERenderMode::Slice) ? ERenderMode::EncodingVis : m_render_mode;
 	if (render_mode == ERenderMode::Shade || render_mode == ERenderMode::Normals) {
-		if (m_spline_sdf.analytic_normals || gt_raytrace) {
+		if (m_sphere_sdf.analytic_normals || gt_raytrace) {
 			normals_function(n_hit, rays_hit.pos, rays_hit.normal, stream);
 		} else {
-			// float fd_normals_epsilon = m_spline_sdf.fd_normals_epsilon;
+			float fd_normals_epsilon = m_sphere_sdf.fd_normals_epsilon;
 
-			// FiniteDifferenceNormalsApproximator fd_normals;
-			// fd_normals.normal(n_hit, distance_function, rays_hit.pos, rays_hit.normal, fd_normals_epsilon, stream);
+			FiniteDifferenceNormalsApproximator fd_normals;
+			fd_normals.normal(n_hit, distance_function, rays_hit.pos, rays_hit.normal, fd_normals_epsilon, stream);
 		}
 
 		if (render_mode == ERenderMode::Shade && n_hit > 0) {
 			// Shadow rays towards the sun
-			SphereTracerSpline shadow_tracer{this};
+			SphereTracerSphere shadow_tracer{this};
 
 			shadow_tracer.init_rays_from_data(n_hit, rays_hit, stream);
 			shadow_tracer.set_fused_trace_kernel(tracer.fused_trace_kernel());
 			shadow_tracer.set_trace_shadow_rays(true);
-			shadow_tracer.set_shadow_sharpness(m_spline_sdf.shadow_sharpness);
+			shadow_tracer.set_shadow_sharpness(m_sphere_sdf.shadow_sharpness);
 			RaysSdfSoa& shadow_rays_init = shadow_tracer.rays_init();
 			linear_kernel(
-				spline_prepare_shadow_rays,
+				sphere_prepare_shadow_rays,
 				0,
 				stream,
 				n_hit,
@@ -1735,7 +1517,7 @@ void Testbed::render_spline(
 			auto& shadow_rays_hit = gt_raytrace ? shadow_tracer.rays_init() : shadow_tracer.rays_hit();
 
 			linear_kernel(
-				spline_write_shadow_ray_result,
+				sphere_write_shadow_ray_result,
 				0,
 				stream,
 				n_hit_shadow,
@@ -1758,14 +1540,14 @@ void Testbed::render_spline(
 	}
 
 	linear_kernel(
-		spline_shade_kernel_sdf,
+		sphere_shade_kernel_sdf,
 		0,
 		stream,
 		n_hit,
 		m_aabb,
 		get_floor_y(),
 		render_mode,
-		m_spline_sdf.brdf,
+		m_sphere_sdf.brdf,
 		normalize(m_sun_dir),
 		normalize(m_up_dir),
 		camera_matrix,
